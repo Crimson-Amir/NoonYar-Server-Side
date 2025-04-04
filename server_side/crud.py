@@ -30,8 +30,18 @@ def create_user(db: Session, user: schemas.SignUpRequirement):
     return db_user
 
 
-def new_customer_no_commit(db: Session, customer_id, bakery_id, datetime):
-    customer = models.Customer(customer_id=customer_id, bakery_id=bakery_id, register_date=datetime)
+def new_customer_no_commit(db: Session, hardware_customer_id, bakery_id, is_in_queue, datetime):
+    customer = models.Customer(
+        hardware_customer_id=hardware_customer_id,
+        bakery_id=bakery_id,
+        is_in_queue=is_in_queue,
+        register_date=datetime
+    )
     db.add(customer)
     db.flush()
     return customer.id
+
+
+def new_bread_customer(db: Session, customer_id, bread_type_id, count):
+    customer_bread = models.CustomerBread(customer_id=customer_id, bread_type_id=bread_type_id, count=count)
+    db.add(customer_bread)

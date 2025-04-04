@@ -172,3 +172,4 @@ async def queue_check(b: int, r: int):
 @app.post('/nc')
 async def new_customer(request: Request, customer: schemas.NewCustomerRequirement, db: Session = Depends(get_db)):
     tasks.register_new_customer.delay(db, customer.customer_id, customer.bakery_id, customer.bread_requirements)
+    return {'status': 'Processing'}

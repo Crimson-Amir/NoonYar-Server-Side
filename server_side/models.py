@@ -1,3 +1,5 @@
+from email.policy import default
+
 from database import Base
 from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger
 from datetime import datetime, UTC
@@ -56,8 +58,9 @@ class Customer(Base):
     __tablename__ = 'customer'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    customer_id = Column(Integer, nullable=False)
+    hardware_customer_id = Column(Integer, nullable=False)
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id'), ondelete='CASCADE')
+    is_in_queue = Column(Boolean, nullable=False)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")
