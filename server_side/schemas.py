@@ -15,7 +15,16 @@ class LogInRequirement(BaseModel):
     phone_number: int
     password: str
 
-class NewCustomerRequirement(BaseModel):
-    customer_id: int
+class BakeryID(BaseModel):
     bakery_id: int
+
+class NewCustomerRequirement(BakeryID):
+    customer_id: int
     bread_requirements: Dict[int, int]
+
+class NextTicketRequirement(BakeryID):
+    next_customer_id: int
+    current_customer_id: int
+
+class Initialize(BakeryID):
+    bread_type_and_cook_time: Dict[int, int]

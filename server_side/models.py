@@ -49,6 +49,7 @@ class BakeryBread(Base):
 
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id'), ondelete='CASCADE', primary_key=True)
     bread_type_id = Column(Integer, ForeignKey('bread_type.bread_id', ondelete='CASCADE'), primary_key=True)
+    cook_time_s = Column(Integer, nullable=False)
 
     bakery = relationship("Bakery", back_populates="bread_associations")
     bread = relationship("BreadType", back_populates="bakery_associations")

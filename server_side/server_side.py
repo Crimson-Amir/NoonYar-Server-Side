@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException, Cookie, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
-import jwt, schemas, crud, pytz, tasks
+import jwt, schemas, crud, tasks
 from database import SessionLocal
 from sqlalchemy.orm import Session
 from auth import create_access_token, create_refresh_token, hash_password_md5
@@ -162,6 +162,7 @@ async def logout(request: Request):
         redirect.delete_cookie(key="refresh_token", httponly=True)
     return redirect
 
+
 @app.get("/res/")
 async def queue_check(b: int, r: int):
     bakery_id = b
@@ -169,7 +170,19 @@ async def queue_check(b: int, r: int):
     return {"b": b, "r": r}
 
 
+@app.post('/init')
+async def initialize(data: schemas.Initialize):
+    tasks.initialize.delay(data.bakery_id, data.bread_type_and_cook_time)
+    return {'status': 'Processing'}
+
+
 @app.post('/nc')
-async def new_customer(request: Request, customer: schemas.NewCustomerRequirement, db: Session = Depends(get_db)):
-    tasks.register_new_customer.delay(db, customer.customer_id, customer.bakery_id, customer.bread_requirements)
+async def new_customer(customer: schemas.NewCustomerRequirement):
+    tasks.register_new_customer.delay(customer.customer_id, customer.bakery_id, customer.bread_requirements)
+    return {'status': 'Processing'}
+
+
+@app.post('/nt')
+async def next_ticket(ticket: schemas.NextTicketRequirement):
+    tasks.next_ticket_process.delay(ticket.current_customer_id, ticket.bakery_id)
     return {'status': 'Processing'}

@@ -1,11 +1,11 @@
-from datetime import datetime
-import pytz, crud, requests, traceback
+from logger_config import setup_logger
+import crud, requests, traceback
 from celery import Celery
 from database import SessionLocal
 from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
 
 celery_app = Celery("tasks", broker="pyamqp://guest@localhost//")
-
+logger = setup_logger('tasks_log')
 
 def report_error_telegram(func_name, error, tb, message):
     err = (
@@ -21,19 +21,35 @@ def report_error_telegram(func_name, error, tb, message):
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+def initialize(bakery_id, bread_type_and_cook_time):
+    db = SessionLocal()
+    try:
+        crud.delete_all_corresponding_bakery_bread(db, bakery_id)
+        crud.add_bakery_bread_entries(db, bakery_id, bread_type_and_cook_time)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        tb = traceback.format_exc()
+        logger.error('error in initialize!', exc_info=True)
+        report_error_telegram(
+            'celery task: initialize', e, tb,f'bakery_id: {bakery_id}\ndict: {bread_type_and_cook_time}')
+        raise e
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def register_new_customer(hardware_customer_id, bakery_id, bread_requirements):
     db = SessionLocal()
     try:
-        c_id = crud.new_customer_no_commit(
-            db, hardware_customer_id, bakery_id, True,
-            datetime.now(pytz.timezone('Asia/Tehran'))
-        )
+        c_id = crud.new_customer_no_commit(db, hardware_customer_id, bakery_id, True)
         for bread_id, count in bread_requirements.items():
             crud.new_bread_customer(db, c_id, bread_id, count)
         db.commit()
     except Exception as e:
         db.rollback()
         tb = traceback.format_exc()
+        logger.error(f'error in register_new_customer. b_id: {bakery_id}, bread_t: {bread_requirements}!', exc_info=True)
         report_error_telegram(
             'celery task: register_new_customer', e, tb,
             f'hardware_customer_id: {hardware_customer_id}'
@@ -42,3 +58,24 @@ def register_new_customer(hardware_customer_id, bakery_id, bread_requirements):
         raise e
     finally:
         db.close()
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+def next_ticket_process(hardware_customer_id, bakery_id):
+    db = SessionLocal()
+    try:
+        crud.update_customer_status(db, hardware_customer_id, bakery_id, False)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        tb = traceback.format_exc()
+        logger.error(f'error in next_ticket_process', exc_info=True)
+        report_error_telegram(
+            'celery task: next_ticket_process', e, tb,
+            f'hardware_customer_id: {hardware_customer_id}'
+            f'\nbakery_id: {bakery_id}')
+        raise e
+    finally:
+        db.close()
+
+

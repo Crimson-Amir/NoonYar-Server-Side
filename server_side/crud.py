@@ -2,23 +2,43 @@ from sqlalchemy.orm import Session
 from sqlalchemy import update, insert, delete
 import models, schemas
 from auth import hash_password_md5
+import pytz
+from sqlalchemy import asc
+from datetime import datetime, time
 
 
 def get_user_by_phone_number(db: Session, phone_number: int):
     return db.query(models.User).filter(models.User.phone_number == phone_number).first()
 
+def get_bakery_breads(db: Session, bakery_id: int):
+    return db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).order_by(asc(models.BakeryBread.bread_type_id)).all()
 
-def add_credit_to_user(db: Session, user_id: int, credit: int):
-    add_credit = (
-        update(models.User)
-        .where(models.User.user_id == user_id)
-        .values(credit=models.User.credit + credit)
-        .returning(models.User)
-    )
-    result = db.execute(add_credit)
-    db.commit()
+def get_today_customers(db: Session, bakery_id: int):
+    tehran = pytz.timezone('Asia/Tehran')
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
 
-    return result.scalar()
+    return db.query(models.Customer).filter(
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.register_date >= midnight_utc,
+        models.Customer.is_in_queue == True).all()
+
+def delete_all_corresponding_bakery_bread(db: Session, bakery_id: int):
+    db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).delete()
+
+
+def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_time: dict):
+    new_entries = [
+        models.BakeryBread(
+            bakery_id=bakery_id,
+            bread_type_id=bread_type_id,
+            cook_time_s=cook_time_s
+        )
+        for bread_type_id, cook_time_s in bread_type_and_cook_time.items()
+    ]
+
+    db.add_all(new_entries)
 
 
 def create_user(db: Session, user: schemas.SignUpRequirement):
@@ -30,12 +50,11 @@ def create_user(db: Session, user: schemas.SignUpRequirement):
     return db_user
 
 
-def new_customer_no_commit(db: Session, hardware_customer_id, bakery_id, is_in_queue, datetime):
+def new_customer_no_commit(db: Session, hardware_customer_id, bakery_id, is_in_queue):
     customer = models.Customer(
         hardware_customer_id=hardware_customer_id,
         bakery_id=bakery_id,
         is_in_queue=is_in_queue,
-        register_date=datetime
     )
     db.add(customer)
     db.flush()
@@ -45,3 +64,17 @@ def new_customer_no_commit(db: Session, hardware_customer_id, bakery_id, is_in_q
 def new_bread_customer(db: Session, customer_id, bread_type_id, count):
     customer_bread = models.CustomerBread(customer_id=customer_id, bread_type_id=bread_type_id, count=count)
     db.add(customer_bread)
+
+
+def update_customer_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
+    customer = (
+        update(models.Customer)
+        .where(models.Customer.hardware_customer_id <= hardware_customer_id)
+        .where(models.Customer.bakery_id == bakery_id)
+        .values(is_in_queue=new_status)
+        .returning(models.User)
+    )
+
+    result = db.execute(customer)
+    return result.scalar()
+
