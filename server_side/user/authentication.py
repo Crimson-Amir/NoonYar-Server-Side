@@ -60,10 +60,11 @@ async def create_user(user: schemas.SignUpRequirement, response: Response, db: S
     return create_user_db
 
 
-@router.post('/login', response_model=schemas.LogInRequirement)
+@router.post('/login')
 async def login(response: Response, user: schemas.LogInRequirement = None, db: Session = Depends(get_db)):
 
     db_user = crud.get_user_by_phone_number(db, user.phone_number)
+
     if not db_user:
         raise HTTPException(status_code=400, detail='phone number does not exist')
 
@@ -95,7 +96,7 @@ async def login(response: Response, user: schemas.LogInRequirement = None, db: S
         max_age=2_592_000
     )
 
-    return db_user
+    return {'status': 'OK', 'user_id': db_user.user_id}
 
 
 @router.post('/logout')
