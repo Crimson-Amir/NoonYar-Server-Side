@@ -64,7 +64,7 @@ async def hardware_initialize(bakery_id: int):
         all_bakery_bread = crud.get_bakery_breads(db, bakery_id)
         bread_time = {}
         for bakery_bread in all_bakery_bread:
-            bread_time[bakery_bread.bread_id] = bakery_bread.cook_time_s
+            bread_time[bakery_bread.bread_type_id] = bakery_bread.cook_time_s
         return bread_time
     finally:
         db.close()
