@@ -12,7 +12,11 @@ class SignUpReturn(BaseModel):
 
 class LogInRequirement(BaseModel):
     phone_number: str
-    password: str
+    # password: str
+
+class LogInValue(BaseModel):
+    phone_number: str
+    code: int
 
 class BakeryID(BaseModel):
     bakery_id: int

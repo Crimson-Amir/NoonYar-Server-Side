@@ -1,10 +1,14 @@
 from logger_config import setup_logger
-import crud, requests, traceback, algorithm
+import crud, requests, traceback, algorithm, utilities
 from celery import Celery
 from database import SessionLocal
 from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
+from private import SMS_KEY
 
-celery_app = Celery("tasks", broker="pyamqp://guest@localhost//")
+celery_app = Celery(
+    "tasks",
+    broker="pyamqp://guest@localhost//"
+    )
 logger = setup_logger('tasks_log')
 
 def report_error_telegram(func_name, error, tb, message):
@@ -83,3 +87,29 @@ def next_ticket_process(hardware_customer_id, bakery_id):
         db.close()
 
 
+@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+def send_OTP(mobile_number, code, expire=10):
+    db = SessionLocal()
+    hashed_otp = utilities.hash_otp(code)
+    try:
+        url = f"https://api.sms.ir/v1/send/verify"
+        data = {"mobile": str(mobile_number), "templateId": "123456", "parameters": [{"name": "code", "value": str(code)}]}
+        headers = {
+            "ACCEPT": "application/json",
+            "X-API-KEY": SMS_KEY
+        }
+        response = requests.post(url, json=data, headers=headers, timeout=10)
+        if response.status_code == 200:
+            crud.invalidate_old_otps(db, mobile_number)
+            crud.add_otp_to_db(db, mobile_number, hashed_otp, True, utilities.get_expiry(expire))
+            db.commit()
+            response_json = response.json()
+            return {"status": response_json['status'], "message": "OTP sent successfully",
+                    "message_id": response_json["data"]["messageId"], "code": code}
+        
+        raise Exception(f"Failed to send OTP: {response.status_code} - {response.text}")
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()

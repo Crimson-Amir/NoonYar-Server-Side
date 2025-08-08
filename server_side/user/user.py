@@ -17,10 +17,8 @@ async def decode_access_token(request):
     decode_data = jwt.decode(data, SECRET_KEY, algorithms=["HS256"])
     return decode_data
 
-
 @router.get('/')
 async def root(): return RedirectResponse('/home')
-
 
 @router.api_route('/home', methods=['POST', 'GET'])
 async def home(request: Request):

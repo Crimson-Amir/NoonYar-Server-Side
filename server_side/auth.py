@@ -1,11 +1,11 @@
-import hashlib
 from datetime import datetime, timedelta
 import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 from hashlib import md5
 from fastapi import HTTPException
 from private import REFRESH_SECRET_KEY, SECRET_KEY, ALGORITHM
 
-def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=15)):
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=60)):
     to_encode = data.copy()
     expire = datetime.now() + expires_delta
     to_encode.update({"exp": expire})
@@ -29,3 +29,12 @@ def hash_password_md5(password: str) -> str:
     md5_hash = md5()
     md5_hash.update(password_bytes)
     return md5_hash.hexdigest()
+
+
+def decode_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
