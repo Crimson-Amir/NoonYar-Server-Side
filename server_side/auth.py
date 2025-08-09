@@ -3,15 +3,15 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from hashlib import md5
 from fastapi import HTTPException
-from private import REFRESH_SECRET_KEY, SECRET_KEY, ALGORITHM
+from private import REFRESH_SECRET_KEY, SECRET_KEY, ALGORITHM, REFRESH_TOKEN_EXP_MIN, ACCESS_TOKEN_EXP_MIN
 
-def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=60)):
+def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=ACCESS_TOKEN_EXP_MIN)):
     to_encode = data.copy()
     expire = datetime.now() + expires_delta
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def create_refresh_token(data: dict, expires_delta: timedelta = timedelta(days=30)):
+def create_refresh_token(data: dict, expires_delta: timedelta = timedelta(minutes=REFRESH_TOKEN_EXP_MIN)):
     to_encode = data.copy()
     expire = datetime.now() + expires_delta
     to_encode.update({"exp": expire})

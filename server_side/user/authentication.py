@@ -1,6 +1,6 @@
 from fastapi import Request, Depends, Response, APIRouter, HTTPException, Cookie
 from fastapi.responses import RedirectResponse
-import schemas, crud, tasks, utilities
+import schemas, crud, tasks, utilities, private
 from sqlalchemy.orm import Session
 from auth import create_access_token, create_refresh_token, hash_password_md5, decode_token
 from database import SessionLocal
@@ -32,16 +32,6 @@ async def otp_verification(db, phone_number, user_code):
         raise HTTPException(status_code=400, detail='OTP is not correct')
     return otp
 
-def set_cookie(response, key, value, max_age):
-    response.set_cookie(
-        key=key,
-        value=value,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=max_age
-    )
-
 @router.post("/verify-signup-otp")
 async def verify_signup_otp(response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
     await otp_verification(db, data.phone_number, data.code)
@@ -49,10 +39,10 @@ async def verify_signup_otp(response: Response, data: schemas.LogInValue, db: Se
     db.commit()
     token = create_access_token(
         data={"phone_number": data.phone_number, "purpose": "signup"},
-        expires_delta=timedelta(minutes=10)
+        expires_delta=timedelta(minutes=private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
     )
 
-    set_cookie(response, "temporary_sign_up_token", token, 600)
+    utilities.set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
     return {"status": "OK"}
 
 @router.post('/sign-up/')
@@ -83,8 +73,8 @@ async def create_user(user: schemas.SignUpRequirement, response: Response, tempo
     access_token = create_access_token(data=user_data)
     cr_refresh_token = create_refresh_token(data=user_data)
 
-    set_cookie(response, "access_token", access_token, 3600)
-    set_cookie(response, "refresh_token", cr_refresh_token, 2_592_000)
+    utilities.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
+    utilities.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
 
     response.delete_cookie("temporary_sign_up_token")
 
@@ -95,7 +85,7 @@ def generate_otp():
     return random.randint(1000, 9999)
 
 @router.post('/enter-number')
-async def get_number(user: schemas.LogInRequirement, db: Session = Depends(get_db)):
+async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get_db)):
     db_user = crud.get_user_by_phone_number(db, user.phone_number)
     code = str(generate_otp())
     next_step = "login"
@@ -124,8 +114,8 @@ async def verify_login(response: Response, data: schemas.LogInValue, db: Session
     access_token = create_access_token(data=user_data)
     cr_refresh_token = create_refresh_token(data=user_data)
 
-    set_cookie(response, "access_token", access_token, 3600)
-    set_cookie(response, "refresh_token", cr_refresh_token, 2_592_000)
+    utilities.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
+    utilities.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
 
     crud.invalidate_old_otps(db, data.phone_number)
     db.commit()

@@ -4,10 +4,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import jwt
 from auth import create_access_token
-from private import REFRESH_SECRET_KEY, SECRET_KEY
+from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN
 from user import authentication, user
 from bakery import hardware_communication, management
 from admin import manage
+import utilities
 
 verification_codes = {}
 
@@ -56,14 +57,7 @@ async def authenticate_request(request: Request, call_next):
 
             request.state.user = jwt.decode(new_token, SECRET_KEY, algorithms=["HS256"])
             response = await call_next(request)
-            response.set_cookie(
-                key="access_token",
-                value=new_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=3600
-            )
+            utilities.set_cookie(response, "access_token", new_token, ACCESS_TOKEN_EXP_MIN * 60)
             return response
         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
             return unauthorized()
