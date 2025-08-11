@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from kombu.transport.virtual import binding_key_t
-
-import crud
+import crud, algorithm
 import schemas, tasks
 from sqlalchemy.orm import Session
 from database import SessionLocal
@@ -41,21 +40,66 @@ async def add_bakery(bakery: schemas.AddBakery, db: Session = Depends(get_db), _
         return bakery
     except Exception as e:
         db.rollback()
-        return {'status': 'NOK', 'msg': f'error: {type(e)}: {str(e)}'}
+        raise HTTPException(
+            status_code=500,
+            detail=f'Error: {type(e).__name__}: {str(e)}'
+        )
 
 
-@router.post('/add_bread', response_model=schemas.AddBreadResult)
+@router.post('/add_bread', response_model=schemas.BreadID)
 async def add_bread(bread: schemas.AddBread, db: Session = Depends(get_db), _:int = Depends(require_admin)):
     try:
         bread_id = crud.add_bread(db, bread)
         return bread_id
     except Exception as e:
         db.rollback()
-        return {'status': 'NOK', 'msg': f'error: {type(e)}: {str(e)}'}
+        raise HTTPException(
+            status_code=500,
+            detail=f'Error: {type(e).__name__}: {str(e)}'
+        )
 
 
 @router.post('/bakery_bread')
 async def bakery_bread(data: schemas.Initialize, _: int = Depends(require_admin)):
-    tasks.initialize.delay(data.bakery_id, data.bread_type_and_cook_time)
+    tasks.initialize.delay(data.bakery_id, data.bread_type_id_and_cook_time)
     return {'status': 'Processing'}
 
+
+@router.put('/add_single_bread_to_bakery')
+async def add_single_bread_to_bakery(
+    data: schemas.AddSingleBreadToBakery,
+    db: Session = Depends(get_db),
+    _: int = Depends(require_admin)
+):
+    try:
+        crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        algorithm.reset_time_per_bread(data.bakery_id)
+        return {'status': 'Successfully added'}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f'Error: {type(e).__name__}: {str(e)}'
+        )
+
+
+@router.delete('/remove_single_bread_from_bakery/{bakery_id}/{bread_id}')
+async def remove_single_bread_from_bakery(
+    bakery_id: int,
+    bread_id: int,
+    db: Session = Depends(get_db),
+    _: int = Depends(require_admin)
+):
+    try:
+        remove_entry = crud.remove_single_bread_from_bakery(db, bakery_id, bread_id)
+        algorithm.reset_time_per_bread(bakery_id)
+        if remove_entry:
+            return {'status': 'Successfully deleted'}
+        return {'status': 'No entry found'}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f'Error: {type(e).__name__}: {str(e)}'
+        )

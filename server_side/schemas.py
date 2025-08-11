@@ -30,7 +30,7 @@ class NextTicketRequirement(BakeryID):
     next_customer_id: int
 
 class Initialize(BakeryID):
-    bread_type_and_cook_time: Dict[str, int]
+    bread_type_id_and_cook_time: Dict[str, int]
 
 class AddBakery(BaseModel):
     name: str
@@ -39,11 +39,14 @@ class AddBakery(BaseModel):
 class AddBakeryResult(BakeryID):
     token: str
 
+class BreadID(BaseModel):
+    bread_id: int
+
 class AddBread(BaseModel):
     name: str
 
-class AddBreadResult(BaseModel):
-    bread_id: int
+class AddSingleBreadToBakery(BreadID, BakeryID):
+    cook_time_s: int
 
 class NewAdminRequirement(BaseModel):
     user_id: int

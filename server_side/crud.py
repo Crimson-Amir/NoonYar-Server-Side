@@ -48,19 +48,6 @@ def invalidate_old_otps(db, phone_number: int):
         models.OTP.valid == True
     ).update({models.OTP.valid: False})
 
-
-def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_time: dict):
-    new_entries = [
-        models.BakeryBread(
-            bakery_id=bakery_id,
-            bread_type_id=int(bread_type_id),
-            cook_time_s=cook_time_s
-        )
-        for bread_type_id, cook_time_s in bread_type_and_cook_time.items()
-    ]
-
-    db.add_all(new_entries)
-
 def add_otp_to_db(db: Session, phone_number: int, hashed_code: str, valid: bool, expiration: datetime):
     otp = models.OTP(
         phone_number=phone_number,
@@ -120,6 +107,44 @@ def add_bread(db: Session, bread: schemas.AddBread):
     db.commit()
     db.refresh(bread_db)
     return bread_db
+
+
+def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_time: dict):
+    new_entries = [
+        models.BakeryBread(
+            bakery_id=bakery_id,
+            bread_type_id=int(bread_type_id),
+            cook_time_s=cook_time_s
+        )
+        for bread_type_id, cook_time_s in bread_type_and_cook_time.items()
+    ]
+
+    db.add_all(new_entries)
+
+def add_single_bread_to_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
+    new_entry = models.BakeryBread(
+        bakery_id=bakery_id,
+        bread_type_id=int(bread_type_id),
+        cook_time_s=cook_time_s
+    )
+    db.add(new_entry)
+    db.commit()
+
+def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: int):
+    bread_entry = (
+        db.query(models.BakeryBread)
+        .filter(
+            models.BakeryBread.bakery_id == bakery_id,
+            models.BakeryBread.bread_type_id == bread_type_id
+        ).first())
+
+    if bread_entry:
+        db.delete(bread_entry)
+        db.commit()
+        return True
+    else:
+        return False
+
 
 def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
     new_admin = models.Admin(user_id=admin.user_id, active=admin.status)

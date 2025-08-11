@@ -31,6 +31,7 @@ def initialize(bakery_id, bread_type_and_cook_time):
         crud.delete_all_corresponding_bakery_bread(db, bakery_id)
         crud.add_bakery_bread_entries(db, bakery_id, bread_type_and_cook_time)
         db.commit()
+        algorithm.reset_time_per_bread(bakery_id)
     except Exception as e:
         db.rollback()
         tb = traceback.format_exc()

@@ -27,7 +27,7 @@ def require_admin(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     is_admin = crud.is_user_admin(db, user_id)
-    if not is_admin or not is_admin.active:
+    if not is_admin:
         raise HTTPException(status_code=403, detail="Admin access only")
 
     return user_id
