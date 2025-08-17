@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from auth import create_access_token, create_refresh_token, hash_password_md5, decode_token
 from database import SessionLocal
 from datetime import timedelta
-import random
+import random, time
 
 router = APIRouter(
     prefix='/auth',
@@ -16,13 +16,6 @@ def get_db():
     db = SessionLocal()
     try: yield db
     finally: db.close()
-
-class TokenBlackList:
-    def __init__(self): self.black_list = set()
-    def add(self, token): self.black_list.add(token)
-    def is_blacklisted(self, token): return token in self.black_list
-
-token_black_list = TokenBlackList()
 
 async def otp_verification(db, phone_number, user_code):
     otp = crud.get_otp(db, phone_number)
@@ -125,9 +118,13 @@ async def verify_login(response: Response, data: schemas.LogInValue, db: Session
 @router.post('/logout')
 async def logout(request: Request):
     token = request.cookies.get('access_token')
-    redirect = RedirectResponse('/home/')
+    redirect = RedirectResponse('/home/', status_code=303)
     if token:
-        token_black_list.add(token)
+        payload = decode_token(token)
+        exp = payload.get("exp")
+        ttl = max(1, exp - int(time.time())) if exp else 3600
+        blacklist = utilities.TokenBlacklist(request.app.state.redis)
+        await blacklist.add(token, ttl)
         redirect.delete_cookie(key='access_token', httponly=True, samesite="lax")
         redirect.delete_cookie(key="refresh_token", httponly=True, samesite="lax")
     request.state.user = None

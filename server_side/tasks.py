@@ -71,7 +71,7 @@ def register_new_customer(hardware_customer_id, bakery_id, bread_requirements):
 def next_ticket_process(hardware_customer_id, bakery_id):
     db = SessionLocal()
     try:
-        crud.update_customer_status(db, hardware_customer_id, bakery_id, False)
+        crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
         data = algorithm.remove_customer_from_reservation_dict(bakery_id, hardware_customer_id)
         db.commit()
         return data

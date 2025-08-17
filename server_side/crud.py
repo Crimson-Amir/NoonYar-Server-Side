@@ -31,6 +31,9 @@ def get_today_customers(db: Session, bakery_id: int):
         models.Customer.register_date >= midnight_utc,
         models.Customer.is_in_queue == True).all()
 
+def delete_all_corresponding_bakery_bread(db: Session, bakery_id: int):
+    db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).delete()
+
 def get_otp(db: Session, phone_number: str):
     otp_entry = db.query(models.OTP).filter(
         models.OTP.phone_number == phone_number,
@@ -38,9 +41,6 @@ def get_otp(db: Session, phone_number: str):
         models.OTP.exception_at > datetime.now(UTC)
     ).order_by(models.OTP.register_date.desc()).first()
     return otp_entry
-
-def delete_all_corresponding_bakery_bread(db: Session, bakery_id: int):
-    db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).delete()
 
 def invalidate_old_otps(db, phone_number: int):
     db.query(models.OTP).filter(
@@ -83,7 +83,7 @@ def new_bread_customer(db: Session, customer_id, bread_type_id, count):
     db.add(customer_bread)
 
 
-def update_customer_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
+def update_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
     customer = (
         update(models.Customer)
         .where(models.Customer.hardware_customer_id <= hardware_customer_id)

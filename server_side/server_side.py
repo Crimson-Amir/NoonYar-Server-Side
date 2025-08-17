@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
@@ -9,19 +9,30 @@ from user import authentication, user
 from bakery import hardware_communication, management
 from admin import manage
 import utilities
+import redis.asyncio as redis
+from contextlib import asynccontextmanager
+from mqtt_client import start_mqtt
 
-verification_codes = {}
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.redis = redis.from_url("redis://localhost:6379", decode_responses=True)
+    yield
+    await app.state.redis.aclose()
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
+
 # templates = Jinja2Templates(directory="templates")
 # app.mount('/statics', StaticFiles(directory='statics'), name='static')
+
+@app.on_event("startup")
+async def startup_event():
+    start_mqtt()
 
 app.include_router(authentication.router)
 app.include_router(user.router)
 app.include_router(hardware_communication.router)
 app.include_router(management.router)
 app.include_router(manage.router)
-
 
 @app.middleware("http")
 async def authenticate_request(request: Request, call_next):
@@ -35,10 +46,13 @@ async def authenticate_request(request: Request, call_next):
     refresh_token = request.cookies.get("refresh_token")
 
     def unauthorized():
-        return RedirectResponse("/auth/sign-up")
+        raise HTTPException(status_code=403, detail='Unauthorized')
 
     if access_token:
         try:
+            blacklist = utilities.TokenBlacklist(request.app.state.redis)
+            if await blacklist.is_blacklisted(access_token):
+                raise HTTPException(status_code=403, detail='Token is in black list!')
             payload = jwt.decode(access_token, SECRET_KEY, algorithms=["HS256"])
             request.state.user = payload
             return await call_next(request)

@@ -1,6 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Header
 import crud
+from utilities import verify_bakery_token
 import schemas, tasks
 from database import SessionLocal
 
@@ -9,22 +10,6 @@ router = APIRouter(
     tags=['hardware_communication']
 )
 
-bakery_token = {}
-
-def get_token(bakery_id):
-    if bakery_id not in bakery_token:
-        db = SessionLocal()
-        try:
-            bakery = crud.get_bakery(db, bakery_id)
-            if not bakery: raise ValueError
-            bakery_token[bakery_id] = bakery.token
-        finally:
-            db.close()
-    return bakery_token[bakery_id]
-
-
-def verify_token(token: str, bakery_id: int) -> bool:
-    return get_token(bakery_id) == token
 
 @router.post('/nc')
 async def new_customer(
@@ -35,7 +20,7 @@ async def new_customer(
         raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
 
     token = authorization[len("Bearer "):]
-    if not verify_token(token, customer.bakery_id):
+    if not verify_bakery_token(token, customer.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
     tasks.register_new_customer.delay(customer.hardware_customer_id, customer.bakery_id, customer.bread_requirements)
@@ -51,7 +36,7 @@ async def next_ticket(
         raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
 
     token = authorization[len("Bearer "):]
-    if not verify_token(token, ticket.bakery_id):
+    if not verify_bakery_token(token, ticket.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
     tasks.next_ticket_process.delay(ticket.current_customer_id, ticket.bakery_id)
     return {'status': 'Processing'}
