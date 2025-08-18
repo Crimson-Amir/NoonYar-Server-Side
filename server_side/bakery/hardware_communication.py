@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Header
 import crud
 from utilities import verify_bakery_token
-import schemas, tasks
+import schemas, tasks, algorithm
 from database import SessionLocal
 
 router = APIRouter(
@@ -23,7 +23,7 @@ async def new_customer(
     if not verify_bakery_token(token, customer.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    tasks.register_new_customer.delay(customer.hardware_customer_id, customer.bakery_id, customer.bread_requirements)
+    tasks.register_new_customer.delay(customer.bakery_id, customer.bread_requirements)
     return {'status': 'Processing'}
 
 

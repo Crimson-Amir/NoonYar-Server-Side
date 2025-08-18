@@ -30,8 +30,8 @@ async def queue_check(request: Request, b: int, r: int):
     data = await decode_access_token(request)
     bakery_data = algorithm.get_bakery_data(b)
 
-    reservation_dict = bakery_data['reservation_dict']
-    bread_time = bakery_data['time_per_bread']
+    reservation_dict = algorithm.get_bakery_reservations(request.state.redis, b)
+    bread_time = algorithm.get_bakery_time_per_bread(request.state.redis, b)
 
     if not bread_time:
         return {'msg': 'bakery does not exist'}

@@ -26,10 +26,11 @@ async def otp_verification(db, phone_number, user_code):
     return otp
 
 @router.post("/verify-signup-otp")
-async def verify_signup_otp(response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
-    await otp_verification(db, data.phone_number, data.code)
-    crud.invalidate_old_otps(db, data.phone_number)
-    db.commit()
+async def verify_signup_otp(request: Request, response: Response, data: schemas.LogInValue):
+    otp_store = utilities.OTPStore(request.app.state.redis)
+    if not await otp_store.verify_otp(data.phone_number, data.code):
+        raise HTTPException(status_code=400, detail="OTP not found or incorrect")
+
     token = create_access_token(
         data={"phone_number": data.phone_number, "purpose": "signup"},
         expires_delta=timedelta(minutes=private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
@@ -90,13 +91,14 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
     # if request_hashed_password != db_user.hashed_password:
         # raise HTTPException(status_code=400, detail='password is not correct')
 
-    task = tasks.send_OTP.delay(user.phone_number, code)
+    task = tasks.send_otp.delay(user.phone_number, code)
     return {'status': 'OK', 'message': 'OTP sent', 'next_step': next_step ,'task_id': task.id}
 
 @router.post('/verify-login')
-async def verify_login(response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
-
-    await otp_verification(db, data.phone_number, data.code)
+async def verify_login(request: Request, response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
+    otp_store = utilities.OTPStore(request.app.state.redis)
+    if not await otp_store.verify_otp(data.phone_number, data.code):
+        raise HTTPException(status_code=400, detail="OTP not found or incorrect")
     db_user = crud.get_user_by_phone_number(db, data.phone_number)
 
     user_data = {
@@ -110,8 +112,6 @@ async def verify_login(response: Response, data: schemas.LogInValue, db: Session
     utilities.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
     utilities.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
 
-    crud.invalidate_old_otps(db, data.phone_number)
-    db.commit()
     return {'status': 'OK', 'user_id': db_user.user_id}
 
 

@@ -103,13 +103,13 @@ class UserCustomer(Base):
     customer = relationship("Customer", back_populates="user_associations")
 
 
-class OTP(Base):
-    __tablename__ = 'otp_table'
-
-    otp_id = Column(Integer, primary_key=True, autoincrement=True)
-    phone_number = Column(BigInteger, nullable=False)
-    hashed_code = Column(String, nullable=False)
-    valid = Column(Boolean, default=False)
-    register_date = Column(DateTime, default=lambda: datetime.now(UTC))
-    exception_at = Column(DateTime, nullable=False)
-    
+# class OTP(Base):
+#     __tablename__ = 'otp_table'
+#
+#     otp_id = Column(Integer, primary_key=True, autoincrement=True)
+#     phone_number = Column(BigInteger, nullable=False)
+#     hashed_code = Column(String, nullable=False)
+#     valid = Column(Boolean, default=False)
+#     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
+#     exception_at = Column(DateTime, nullable=False)
+#

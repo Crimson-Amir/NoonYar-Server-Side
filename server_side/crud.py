@@ -1,15 +1,13 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import update, insert, delete
+from sqlalchemy import update
 import models, schemas
 from auth import hash_password_md5
 import pytz
 from sqlalchemy import asc
-from datetime import datetime, time, UTC
-
+from datetime import datetime, time
 
 def get_user_by_phone_number(db: Session, phone_number: str):
     return db.query(models.User).filter(models.User.phone_number == phone_number).first()
-
 
 def is_user_admin(db: Session, user_id: str):
     return db.query(models.Admin).filter_by(user_id=user_id, active=True).first()
@@ -34,29 +32,29 @@ def get_today_customers(db: Session, bakery_id: int):
 def delete_all_corresponding_bakery_bread(db: Session, bakery_id: int):
     db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).delete()
 
-def get_otp(db: Session, phone_number: str):
-    otp_entry = db.query(models.OTP).filter(
-        models.OTP.phone_number == phone_number,
-        models.OTP.valid == True,
-        models.OTP.exception_at > datetime.now(UTC)
-    ).order_by(models.OTP.register_date.desc()).first()
-    return otp_entry
+# def get_otp(db: Session, phone_number: str):
+#     otp_entry = db.query(models.OTP).filter(
+#         models.OTP.phone_number == phone_number,
+#         models.OTP.valid == True,
+#         models.OTP.exception_at > datetime.now(UTC)
+#     ).order_by(models.OTP.register_date.desc()).first()
+#     return otp_entry
+#
+# def invalidate_old_otps(db, phone_number: int):
+#     db.query(models.OTP).filter(
+#         models.OTP.phone_number == phone_number,
+#         models.OTP.valid == True
+#     ).update({models.OTP.valid: False})
 
-def invalidate_old_otps(db, phone_number: int):
-    db.query(models.OTP).filter(
-        models.OTP.phone_number == phone_number,
-        models.OTP.valid == True
-    ).update({models.OTP.valid: False})
-
-def add_otp_to_db(db: Session, phone_number: int, hashed_code: str, valid: bool, expiration: datetime):
-    otp = models.OTP(
-        phone_number=phone_number,
-        hashed_code=hashed_code,
-        valid=valid,
-        exception_at=expiration
-    )
-
-    db.add(otp)
+# def add_otp_to_db(db: Session, phone_number: int, hashed_code: str, valid: bool, expiration: datetime):
+#     otp = models.OTP(
+#         phone_number=phone_number,
+#         hashed_code=hashed_code,
+#         valid=valid,
+#         exception_at=expiration
+#     )
+#
+#     db.add(otp)
 
 def create_user(db: Session, user: schemas.SignUpRequirement):
     hash_password = hash_password_md5(user.password)

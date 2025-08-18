@@ -45,3 +45,23 @@ class TokenBlacklist:
         await self.r.set(token, 1, ex=ttl, nx=True)
     async def is_blacklisted(self, token: str) -> bool:
         return await self.r.exists(token) == 1
+
+
+# services/otp.py
+class OTPStore:
+    def __init__(self, r):
+        self.r = r
+
+    def set_otp(self, phone_number: str, otp: str, ttl: int = 300):
+        hashed = hash_otp(otp)
+        self.r.set(f"otp:{phone_number}", hashed, ex=ttl)
+
+    async def verify_otp(self, phone_number: str, otp: str) -> bool:
+        key = f"otp:{phone_number}"
+        hashed = await self.r.get(key)
+        if not hashed:
+            return False
+        if hashed != hash_otp(otp):
+            return False
+        await self.r.delete(key)
+        return True

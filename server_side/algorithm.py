@@ -1,15 +1,21 @@
 import crud
 from database import SessionLocal
+import json
+from typing import List, Dict
 
 class Algorithm:
 
     @staticmethod
-    def new_reservation(reservation_dict, bread1_c, bread2_c, bread3_c):
-        total = bread1_c + bread2_c + bread3_c
+    def new_reservation(reservation_dict: Dict[int, List[int]], bread_counts: List[int]):
+        """
+        reservation_dict: {position: [bread_counts]}
+        bread_counts: list of bread counts (any length)
+        """
+        total = sum(bread_counts)
         keys = sorted(reservation_dict.keys())
 
         if not keys:
-            reservation_dict[1] = [bread1_c, bread2_c, bread3_c]
+            reservation_dict[1] = bread_counts
             return
 
         last_key = keys[-1]
@@ -18,11 +24,11 @@ class Algorithm:
         if total == 1:
             for i in range(len(keys) - 1):
                 if sum(reservation_dict[keys[i]]) > 1 and sum(reservation_dict[keys[i + 1]]) > 1:
-                    reservation_dict[keys[i] + 1] = [bread1_c, bread2_c, bread3_c]
+                    reservation_dict[keys[i] + 1] = bread_counts
                     return
 
             new_key = 1 if not keys else keys[-1] + (2 if last_sum == 1 else 1)
-            reservation_dict[new_key] = [bread1_c, bread2_c, bread3_c]
+            reservation_dict[new_key] = bread_counts
 
         else:
             last_multiple = 0
@@ -32,13 +38,13 @@ class Algorithm:
                     break
             distance = (keys[-1] - last_multiple) // 2
             if last_multiple == last_key:
-                reservation_dict[last_key + 2] = [bread1_c, bread2_c, bread3_c]
+                reservation_dict[last_key + 2] = bread_counts
 
             elif distance < total and last_sum == 1:
-                reservation_dict[last_key + 1] = [bread1_c, bread2_c, bread3_c]
+                reservation_dict[last_key + 1] = bread_counts
 
             else:
-                reservation_dict[last_multiple + (total * 2)] = [bread1_c, bread2_c, bread3_c]
+                reservation_dict[last_multiple + (total * 2)] = bread_counts
 
     @staticmethod
     def compute_bread_time(time_per_bread, reserve):
@@ -53,7 +59,7 @@ class Algorithm:
 
     @staticmethod
     def compute_empty_slot_time(keys, index, reservation_dict):
-        time, consecutive_empty, consecutive_full = 0, 0, 0
+        consecutive_empty, consecutive_full = 0, 0
 
         prev_sum = sum(reservation_dict[keys[0]]) if keys else 0  # Handle empty keys case
 
@@ -74,53 +80,100 @@ class Algorithm:
 
         return consecutive_empty + consecutive_full
 
-bakery_data = {}
+def get_bakery_reservations(r, bakery_id: int):
+    """
+    Fetch reservations for a bakery.
+    Structure: {customer_id: [bread_counts]}
+    """
+    key = f"bakery:{bakery_id}:reservations"
+    reservations = r.hgetall(key)
 
-def get_bakery_data(bakery_id):
-    if bakery_id not in bakery_data:
-        db = SessionLocal()
+    if reservations:
+        return {int(k): json.loads(v) for k, v in reservations.items()}
 
-        try:
-            bakery_breads = crud.get_bakery_breads(db, bakery_id)
-            today_customers = crud.get_today_customers(db, bakery_id)
+    db = SessionLocal()
+    try:
+        today_customers = crud.get_today_customers(db, bakery_id)
+        time_per_bread = get_bakery_time_per_bread(r, bakery_id)  # reuse other function
 
-            time_per_bread = {bread.bread_type_id: bread.cook_time_s for bread in bakery_breads}
+        reservation_dict = {}
+        for customer in today_customers:
+            bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
+            reservation = [bread_counts.get(bread_id, 0) for bread_id in sorted(time_per_bread.keys())]
+            reservation_dict[customer.id] = reservation
 
-            reservation_dict = {}
-            for customer in today_customers:
-                bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
-                reservation = [bread_counts.get(bread_id, 0) for bread_id in time_per_bread]
-                reservation_dict[customer.hardware_customer_id] = reservation
+        if reservation_dict:
+            r.hset(key, mapping={str(k): json.dumps(v) for k, v in reservation_dict.items()})
 
-            bakery_data[bakery_id] = {
-                'reservation_dict': reservation_dict,
-                'time_per_bread': time_per_bread
-            }
-        finally:
-            db.close()
-
-    return bakery_data[bakery_id]
-
-
-def remove_customer_from_reservation_dict(bakery_id, hardware_customer_id):
-    data = get_bakery_data(bakery_id)
-    for i in range(hardware_customer_id + 1):
-        data['reservation_dict'].pop(i, None)
-    return data
+        return reservation_dict
+    finally:
+        db.close()
 
 
-def add_customer_to_reservation_dict(bakery_id, hardware_customer_id, bread_count_data):
-    data = get_bakery_data(bakery_id)
-    reservation = [bread_count_data.get(str(bread_id), 0) for bread_id in data['time_per_bread']]
-    data['reservation_dict'][hardware_customer_id] = reservation
-    return data
+def get_bakery_time_per_bread(r, bakery_id: int):
+    """
+    Fetch bread type -> cook time mapping for a bakery.
+    Structure: {bread_type_id: cook_time_s}
+    """
+    key = f"bakery:{bakery_id}:time_per_bread"
+    time_per_bread = r.hgetall(key)
 
+    if time_per_bread:
+        return {
+            int(k): int(v)
+            for k, v in sorted(time_per_bread.items(), key=lambda item: int(item[0]))
+        }
 
-def reset_time_per_bread(bakery_id):
+    # Fallback: fetch from DB
     db = SessionLocal()
     try:
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
         time_per_bread = {bread.bread_type_id: bread.cook_time_s for bread in bakery_breads}
-        bakery_data[bakery_id]['time_per_bread'] = time_per_bread
+
+        if time_per_bread:
+            r.hset(key, mapping={str(k): v for k, v in time_per_bread.items()})
+
+        return time_per_bread
+    finally:
+        db.close()
+
+def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[int, int]):
+    """
+    Add or update a customer's reservation in Redis.
+    - bread_count_data: {bread_type_id: count}
+    """
+    time_per_bread = get_bakery_time_per_bread(r, bakery_id)  # ensure bread types exist
+    reservations_key = f"bakery:{bakery_id}:reservations"
+
+    # Ensure reservation list matches the order of time_per_bread keys
+    reservation = [bread_count_data.get(bread_id, 0) for bread_id in sorted(time_per_bread.keys())]
+
+    # Save to Redis
+    r.hset(reservations_key, str(customer_id), json.dumps(reservation))
+
+def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
+    """
+    Remove a single customer's reservation from Redis.
+    """
+    reservations_key = f"bakery:{bakery_id}:reservations"
+    r.hdel(reservations_key, str(customer_id))
+
+def reset_time_per_bread(r, bakery_id: int):
+    """
+    Reset (refresh) time_per_bread for a bakery from the database into Redis.
+    """
+    db = SessionLocal()
+    try:
+        bakery_breads = crud.get_bakery_breads(db, bakery_id)
+        time_per_bread = {bread.bread_type_id: bread.cook_time_s for bread in bakery_breads}
+
+        # Save into Redis hash
+        key = f"bakery:{bakery_id}:time_per_bread"
+        if time_per_bread:
+            # overwrite existing values
+            r.delete(key)
+            r.hset(key, mapping={str(k): v for k, v in time_per_bread.items()})
+
+        return time_per_bread
     finally:
         db.close()
