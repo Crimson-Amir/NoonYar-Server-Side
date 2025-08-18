@@ -123,6 +123,7 @@ def get_bakery_time_per_bread(r, bakery_id: int):
             int(k): int(v)
             for k, v in sorted(time_per_bread.items(), key=lambda item: int(item[0]))
         }
+        # return {int(k): int(v) for k, v in time_per_bread.items()}
 
     # Fallback: fetch from DB
     db = SessionLocal()
