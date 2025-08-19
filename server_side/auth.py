@@ -10,7 +10,7 @@ def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes
     to_encode = data.copy()
     expire = datetime.now() + expires_delta
     to_encode.update({"exp": int(expire.timestamp())})
-    return jwt.encode(to_encode, "SECRET_KEY", algorithm="HS256")
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def create_refresh_token(data: dict, expires_delta: timedelta = timedelta(minutes=REFRESH_TOKEN_EXP_MIN)):
     to_encode = data.copy()
@@ -25,10 +25,10 @@ def hash_password_md5(password: str) -> str:
     return md5_hash.hexdigest()
 
 
-def decode_token(token: str) -> dict:
+def decode_token(token: str, key=SECRET_KEY) -> dict:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return jwt.decode(token, key, algorithms=ALGORITHM)
     except ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
+        raise HTTPException(status_code=401, detail="Decod failed: Token expired")
     except InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Decod failed: Invalid token")

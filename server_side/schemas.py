@@ -22,7 +22,7 @@ class BakeryID(BaseModel):
     bakery_id: int
 
 class NewCustomerRequirement(BakeryID):
-    bread_requirements: Dict[str, int]
+    bread_requirements: Dict[int, int]
 
 class NextTicketRequirement(BakeryID):
     current_customer_id: int

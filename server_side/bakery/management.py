@@ -60,20 +60,22 @@ async def add_bread(bread: schemas.AddBread, db: Session = Depends(get_db), _:in
 
 
 @router.post('/bakery_bread')
-async def bakery_bread(data: schemas.Initialize, _: int = Depends(require_admin)):
+async def bakery_bread(request: Request, data: schemas.Initialize, _: int = Depends(require_admin)):
+    await algorithm.reset_time_per_bread(request, data.bakery_id)
     tasks.initialize.delay(data.bakery_id, data.bread_type_id_and_cook_time)
     return {'status': 'Processing'}
 
 
 @router.put('/add_single_bread_to_bakery')
 async def add_single_bread_to_bakery(
+    request: Request,
     data: schemas.AddSingleBreadToBakery,
     db: Session = Depends(get_db),
     _: int = Depends(require_admin)
 ):
     try:
         crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
-        algorithm.reset_time_per_bread(data.bakery_id)
+        await algorithm.reset_time_per_bread(request.app.state.redis, data.bakery_id)
         return {'status': 'Successfully added'}
     except Exception as e:
         db.rollback()
@@ -85,6 +87,7 @@ async def add_single_bread_to_bakery(
 
 @router.delete('/remove_single_bread_from_bakery/{bakery_id}/{bread_id}')
 async def remove_single_bread_from_bakery(
+    request: Request,
     bakery_id: int,
     bread_id: int,
     db: Session = Depends(get_db),
@@ -92,7 +95,7 @@ async def remove_single_bread_from_bakery(
 ):
     try:
         remove_entry = crud.remove_single_bread_from_bakery(db, bakery_id, bread_id)
-        algorithm.reset_time_per_bread(bakery_id)
+        await algorithm.reset_time_per_bread(request.app.state.redis, bakery_id)
         if remove_entry:
             return {'status': 'Successfully deleted'}
         return {'status': 'No entry found'}

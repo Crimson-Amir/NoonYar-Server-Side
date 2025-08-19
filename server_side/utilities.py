@@ -1,8 +1,9 @@
-import hashlib
-import datetime
+import hashlib, datetime
 import crud
 from database import SessionLocal
+import logging
 
+logging.getLogger("app")
 
 def hash_otp(code: str) -> str:
     return hashlib.sha256(str(code).encode()).hexdigest()[:24]
@@ -59,9 +60,11 @@ class OTPStore:
     async def verify_otp(self, phone_number: str, otp: str) -> bool:
         key = f"otp:{phone_number}"
         hashed = await self.r.get(key)
+        print(hashed, hash_otp(otp))
         if not hashed:
             return False
         if hashed != hash_otp(otp):
             return False
         await self.r.delete(key)
         return True
+

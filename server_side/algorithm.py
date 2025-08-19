@@ -119,11 +119,7 @@ def get_bakery_time_per_bread(r, bakery_id: int):
     time_per_bread = r.hgetall(key)
 
     if time_per_bread:
-        return {
-            int(k): int(v)
-            for k, v in sorted(time_per_bread.items(), key=lambda item: int(item[0]))
-        }
-        # return {int(k): int(v) for k, v in time_per_bread.items()}
+        return {int(k): int(v) for k, v in time_per_bread.items()}
 
     # Fallback: fetch from DB
     db = SessionLocal()
@@ -159,7 +155,7 @@ def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
     reservations_key = f"bakery:{bakery_id}:reservations"
     r.hdel(reservations_key, str(customer_id))
 
-def reset_time_per_bread(r, bakery_id: int):
+async def reset_time_per_bread(r, bakery_id: int):
     """
     Reset (refresh) time_per_bread for a bakery from the database into Redis.
     """
@@ -172,8 +168,8 @@ def reset_time_per_bread(r, bakery_id: int):
         key = f"bakery:{bakery_id}:time_per_bread"
         if time_per_bread:
             # overwrite existing values
-            r.delete(key)
-            r.hset(key, mapping={str(k): v for k, v in time_per_bread.items()})
+            await r.delete(key)
+            await r.hset(key, mapping={str(k): v for k, v in time_per_bread.items()})
 
         return time_per_bread
     finally:

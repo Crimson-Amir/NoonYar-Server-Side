@@ -51,7 +51,7 @@ async def create_user(user: schemas.SignUpRequirement, response: Response, tempo
 
     phone_number = payload.get("phone_number")
     if not phone_number or phone_number != user.phone_number:
-        raise HTTPException(status_code=400, detail=f"Invalid token {phone_number}")
+        raise HTTPException(status_code=400, detail=f"Invalid token")
 
     db_user = crud.get_user_by_phone_number(db, phone_number)
     if db_user:
@@ -97,9 +97,14 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
 @router.post('/verify-login')
 async def verify_login(request: Request, response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
     otp_store = utilities.OTPStore(request.app.state.redis)
+
     if not await otp_store.verify_otp(data.phone_number, data.code):
         raise HTTPException(status_code=400, detail="OTP not found or incorrect")
+
     db_user = crud.get_user_by_phone_number(db, data.phone_number)
+
+    if not db_user:
+        raise HTTPException(status_code=401, detail="User does not exists")
 
     user_data = {
         "first_name": db_user.first_name,
@@ -114,19 +119,30 @@ async def verify_login(request: Request, response: Response, data: schemas.LogIn
 
     return {'status': 'OK', 'user_id': db_user.user_id}
 
-
 @router.post('/logout')
 async def logout(request: Request):
-    token = request.cookies.get('access_token')
     redirect = RedirectResponse('/home/', status_code=303)
-    if token:
-        payload = decode_token(token)
+    blacklist = utilities.TokenBlacklist(request.app.state.redis)
+
+    # Access token
+    access_token = request.cookies.get("access_token")
+    if access_token:
+        payload = decode_token(access_token)
         exp = payload.get("exp")
-        ttl = max(1, exp - int(time.time())) if exp else 3600
-        blacklist = utilities.TokenBlacklist(request.app.state.redis)
-        await blacklist.add(token, ttl)
-        redirect.delete_cookie(key='access_token', httponly=True, samesite="lax")
-        redirect.delete_cookie(key="refresh_token", httponly=True, samesite="lax")
+        ttl = max(1, exp - int(time.time())) if exp else private.ACCESS_TOKEN_EXP_MIN * 60
+        await blacklist.add(access_token, ttl)
+
+    # Refresh token
+    refresh_token = request.cookies.get("refresh_token")
+    if refresh_token:
+        payload = decode_token(refresh_token, private.REFRESH_SECRET_KEY)
+        exp = payload.get("exp")
+        ttl = max(1, exp - int(time.time())) if exp else private.REFRESH_TOKEN_EXP_MIN * 60
+        await blacklist.add(refresh_token, ttl)
+
+    # Clear cookies
+    redirect.delete_cookie(key='access_token', httponly=True, samesite="lax")
+    redirect.delete_cookie(key="refresh_token", httponly=True, samesite="lax")
+
     request.state.user = None
     return redirect
-

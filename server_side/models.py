@@ -16,7 +16,7 @@ class User(Base):
 
     user_id = Column(Integer, primary_key=True)
     email = Column(String, unique=True)
-    phone_number = Column(BigInteger, unique=True, default=None)
+    phone_number = Column(String, unique=True, default=None)
     first_name = Column(String)
     last_name = Column(String)
     hashed_password = Column(String)

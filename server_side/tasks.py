@@ -1,29 +1,41 @@
-from logger_config import setup_logger
-import crud, requests, traceback, algorithm, utilities
+import crud, requests, algorithm, utilities
 from celery import Celery
 from database import SessionLocal
 from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
 from private import SMS_KEY
-import redis
+import redis, traceback
+from uuid import uuid4
+from logger_config import logger
 
 celery_app = Celery(
     "tasks",
     broker="pyamqp://guest@localhost//"
-    )
-logger = setup_logger('tasks_log')
+)
 
-def report_error_telegram(func_name, error, tb, message):
+def log_and_report_error(context: str, error: Exception, extra: dict = None):
+    tb = traceback.format_exc()
+    error_id = uuid4().hex
+    extra["error_id"] = error_id
+    logger.error(
+        context, extra={"error": str(error), "traceback": tb, **extra}
+    )
+    report_error_telegram.delay(context, error, error_id, extra)
+
+
+@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+def report_error_telegram(context, e, error_id, extra: dict = None):
     err = (
-        f"🔴 An error occurred in {func_name}:"
-        f"\n\n{message}"
-        f"\n\nerror type:{type(error)}"
-        f"\nerror reason: {str(error)}"
-        f"\n\nTraceback: \n{tb}"
+        f"🔴 [Error]:"
+        f"\n\n{context}"
+        f"\n\nError type:{type(e)}"
+        f"\nError reason: {str(e)}"
+        f"\nErrorID: {error_id}"
+        f"\n\nExtera Info:"
+        f"\n{extra}"
     )
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": err, 'message_thread_id': ERR_THREAD_ID}
     requests.post(url, data=data, timeout=5)
-
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def initialize(bakery_id, bread_type_and_cook_time):
@@ -32,13 +44,12 @@ def initialize(bakery_id, bread_type_and_cook_time):
         crud.delete_all_corresponding_bakery_bread(db, bakery_id)
         crud.add_bakery_bread_entries(db, bakery_id, bread_type_and_cook_time)
         db.commit()
-        algorithm.reset_time_per_bread(bakery_id)
     except Exception as e:
         db.rollback()
-        tb = traceback.format_exc()
-        logger.error('error in initialize!', exc_info=True)
-        report_error_telegram(
-            'celery task: initialize', e, tb,f'bakery_id: {bakery_id}\ndict: {bread_type_and_cook_time}')
+        log_and_report_error(
+            "Celery task: initialize", e,
+            {"bakery_id": bakery_id, "bread_time_and_cook_time": bread_type_and_cook_time}
+        )
         raise e
     finally:
         db.close()
@@ -48,21 +59,17 @@ def initialize(bakery_id, bread_type_and_cook_time):
 def register_new_customer(hardware_customer_id, bakery_id, bread_requirements):
     db = SessionLocal()
     try:
-        data = algorithm.add_customer_to_reservation_dict(bakery_id, hardware_customer_id, bread_requirements)
         c_id = crud.new_customer_no_commit(db, hardware_customer_id, bakery_id, True)
         for bread_id, count in bread_requirements.items():
             crud.new_bread_customer(db, c_id, int(bread_id), count)
         db.commit()
-        return data
     except Exception as e:
         db.rollback()
-        tb = traceback.format_exc()
-        logger.error(f'error in register_new_customer. b_id: {bakery_id}, bread_t: {bread_requirements}!', exc_info=True)
-        report_error_telegram(
-            'celery task: register_new_customer', e, tb,
-            f'hardware_customer_id: {hardware_customer_id}'
-            f'\nbakery_id: {bakery_id}'
-            f'\nbread_requirements: {bread_requirements}')
+        log_and_report_error(
+            "Celery task: register_new_customer", e,
+            {"hardware_customer_id": hardware_customer_id,
+             "bakery_id": bakery_id, "bread_requirements": bread_requirements}
+        )
         raise e
     finally:
         db.close()
@@ -73,17 +80,13 @@ def next_ticket_process(hardware_customer_id, bakery_id):
     db = SessionLocal()
     try:
         crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
-        data = algorithm.remove_customer_from_reservation_dict(bakery_id, hardware_customer_id)
         db.commit()
-        return data
     except Exception as e:
         db.rollback()
-        tb = traceback.format_exc()
-        logger.error(f'error in next_ticket_process', exc_info=True)
-        report_error_telegram(
-            'celery task: next_ticket_process', e, tb,
-            f'hardware_customer_id: {hardware_customer_id}'
-            f'\nbakery_id: {bakery_id}')
+        log_and_report_error(
+            "Celery task: next_ticket_process", e,
+            {"hardware_customer_id": hardware_customer_id, "bakery_id": bakery_id}
+        )
         raise e
     finally:
         db.close()
@@ -92,7 +95,6 @@ def next_ticket_process(hardware_customer_id, bakery_id):
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def send_otp(mobile_number, code, expire_m=10):
     db = SessionLocal()
-    hashed_otp = utilities.hash_otp(code)
     try:
         url = f"https://api.sms.ir/v1/send/verify"
         data = {
@@ -108,7 +110,7 @@ def send_otp(mobile_number, code, expire_m=10):
         if response.status_code == 200:
             r = redis.Redis(host="localhost", port=6379, decode_responses=True)
             otp_store = utilities.OTPStore(r)
-            otp_store.set_otp(mobile_number, hashed_otp, expire_m * 60)
+            otp_store.set_otp(mobile_number, code, expire_m * 60)
             response_json = response.json()
             return {"status": response_json['status'], "message": "OTP sent successfully",
                     "message_id": response_json["data"]["messageId"], "code": code}
@@ -116,6 +118,9 @@ def send_otp(mobile_number, code, expire_m=10):
         raise Exception(f"Failed to send OTP: {response.status_code} - {response.text}")
     except Exception as e:
         db.rollback()
+        log_and_report_error(
+            "Celery task: send_otp", e, {"mobile_number": mobile_number}
+        )
         raise e
     finally:
         db.close()

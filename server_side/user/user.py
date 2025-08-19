@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 from fastapi import Request
 from fastapi.responses import RedirectResponse
-
 from algorithm import Algorithm
 from private import SECRET_KEY
 import jwt, algorithm
@@ -28,10 +27,8 @@ async def home(request: Request):
 @router.get("/res/")
 async def queue_check(request: Request, b: int, r: int):
     data = await decode_access_token(request)
-    bakery_data = algorithm.get_bakery_data(b)
-
-    reservation_dict = algorithm.get_bakery_reservations(request.state.redis, b)
-    bread_time = algorithm.get_bakery_time_per_bread(request.state.redis, b)
+    reservation_dict = algorithm.get_bakery_reservations(request.app.state.redis, b)
+    bread_time = algorithm.get_bakery_time_per_bread(request.app.state.redis, b)
 
     if not bread_time:
         return {'msg': 'bakery does not exist'}
