@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, HTTPException, Header, Request, Depends
 import crud, algorithm
 from utilities import verify_bakery_token
 import schemas, tasks, algorithm
@@ -10,27 +10,26 @@ router = APIRouter(
     tags=['hardware_communication']
 )
 
+def validate_token(authorization: str = Header(...)) -> str:
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
+    return authorization[len("Bearer "):]
+
 @router.post('/nc')
 async def new_customer(
     request: Request,
     customer: schemas.NewCustomerRequirement,
-    authorization: Optional[str] = Header(None)
+    token: str = Depends(validate_token)
 ):
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
-
-    token = authorization[len("Bearer "):]
     if not verify_bakery_token(token, customer.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    breads_type = algorithm.get_bakery_time_per_bread(request.state.redis, customer.bakery_id)
+    breads_type = await algorithm.get_bakery_time_per_bread(request.state.redis, customer.bakery_id)
 
     if sorted(breads_type.keys()) != sorted(customer.bread_requirements.keys()):
         raise HTTPException(status_code=400, detail="invalid bread types")
 
-    algorithm.add_customer_to_reservation_dict(request.state.redis, customer.bakery_id, customer.bread_requirements)
-
-
+    await algorithm.add_customer_to_reservation_dict(request.state.redis, customer.bakery_id, customer.bread_requirements)
     tasks.register_new_customer.delay(customer.bakery_id, customer.bread_requirements)
     return {'status': 'Processing'}
 

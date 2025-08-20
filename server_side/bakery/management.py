@@ -60,10 +60,17 @@ async def add_bread(bread: schemas.AddBread, db: Session = Depends(get_db), _:in
 
 
 @router.post('/bakery_bread')
-async def bakery_bread(request: Request, data: schemas.Initialize, _: int = Depends(require_admin)):
-    await algorithm.reset_time_per_bread(request, data.bakery_id)
-    tasks.initialize.delay(data.bakery_id, data.bread_type_id_and_cook_time)
-    return {'status': 'Processing'}
+async def bakery_bread(
+        request: Request,
+        data: schemas.Initialize,
+        db: Session = Depends(get_db),
+        _: int = Depends(require_admin)
+):
+    crud.delete_all_corresponding_bakery_bread(db, data.bakery_id)
+    crud.add_bakery_bread_entries(db, data.bakery_id, data.bread_type_id_and_cook_time)
+    db.commit()
+    await algorithm.reset_time_per_bread(request.app.state.redis, data.bakery_id)
+    return {'status': 'successfully updated'}
 
 
 @router.put('/add_single_bread_to_bakery')
@@ -76,7 +83,7 @@ async def add_single_bread_to_bakery(
     try:
         crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
         await algorithm.reset_time_per_bread(request.app.state.redis, data.bakery_id)
-        return {'status': 'Successfully added'}
+        return {'status': 'successfully added'}
     except Exception as e:
         db.rollback()
         raise HTTPException(

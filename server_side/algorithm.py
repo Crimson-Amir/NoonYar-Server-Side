@@ -80,13 +80,13 @@ class Algorithm:
 
         return consecutive_empty + consecutive_full
 
-def get_bakery_reservations(r, bakery_id: int):
+async def get_bakery_reservations(r, bakery_id: int):
     """
     Fetch reservations for a bakery.
     Structure: {customer_id: [bread_counts]}
     """
     key = f"bakery:{bakery_id}:reservations"
-    reservations = r.hgetall(key)
+    reservations = await r.hgetall(key)
 
     if reservations:
         return {int(k): json.loads(v) for k, v in reservations.items()}
@@ -94,82 +94,82 @@ def get_bakery_reservations(r, bakery_id: int):
     db = SessionLocal()
     try:
         today_customers = crud.get_today_customers(db, bakery_id)
-        time_per_bread = get_bakery_time_per_bread(r, bakery_id)  # reuse other function
+        time_per_bread = await get_bakery_time_per_bread(r, bakery_id)  # reuse other function
 
         reservation_dict = {}
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
-            reservation = [bread_counts.get(bread_id, 0) for bread_id in sorted(time_per_bread.keys())]
+            reservation = [bread_counts.get(int(bread_id), 0) for bread_id in time_per_bread.keys()]
             reservation_dict[customer.id] = reservation
 
         if reservation_dict:
-            r.hset(key, mapping={str(k): json.dumps(v) for k, v in reservation_dict.items()})
+            await r.hset(key, mapping={str(k): json.dumps(v) for k, v in reservation_dict.items()})
 
         return reservation_dict
     finally:
         db.close()
 
 
-def get_bakery_time_per_bread(r, bakery_id: int):
+async def get_bakery_time_per_bread(r, bakery_id: int):
     """
     Fetch bread type -> cook time mapping for a bakery.
-    Structure: {bread_type_id: cook_time_s}
+    Stored in Redis as JSON string: {"1": 60, "2": 80, "3": 20}
     """
     key = f"bakery:{bakery_id}:time_per_bread"
-    time_per_bread = r.hgetall(key)
+    raw = await r.get(key)
 
-    if time_per_bread:
-        return {int(k): int(v) for k, v in time_per_bread.items()}
+    if raw:
+        return json.loads(raw)  # Already sorted because DB query is sorted
 
     # Fallback: fetch from DB
     db = SessionLocal()
     try:
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
-        time_per_bread = {bread.bread_type_id: bread.cook_time_s for bread in bakery_breads}
+
+        time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
         if time_per_bread:
-            r.hset(key, mapping={str(k): v for k, v in time_per_bread.items()})
+            await r.set(key, json.dumps(time_per_bread))
 
         return time_per_bread
     finally:
         db.close()
 
-def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[int, int]):
+
+async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[int, int]):
     """
     Add or update a customer's reservation in Redis.
     - bread_count_data: {bread_type_id: count}
     """
-    time_per_bread = get_bakery_time_per_bread(r, bakery_id)  # ensure bread types exist
+    time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
     reservations_key = f"bakery:{bakery_id}:reservations"
 
     # Ensure reservation list matches the order of time_per_bread keys
-    reservation = [bread_count_data.get(bread_id, 0) for bread_id in sorted(time_per_bread.keys())]
+    reservation = [bread_count_data.get(int(bread_id), 0) for bread_id in time_per_bread.keys()]
 
     # Save to Redis
-    r.hset(reservations_key, str(customer_id), json.dumps(reservation))
+    await r.hset(reservations_key, str(customer_id), json.dumps(reservation))
 
-def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
+async def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
     """
     Remove a single customer's reservation from Redis.
     """
     reservations_key = f"bakery:{bakery_id}:reservations"
-    r.hdel(reservations_key, str(customer_id))
+    await r.hdel(reservations_key, str(customer_id))
+
 
 async def reset_time_per_bread(r, bakery_id: int):
     """
-    Reset (refresh) time_per_bread for a bakery from the database into Redis.
+    Refresh time_per_bread for a bakery from DB into Redis (JSON format).
     """
     db = SessionLocal()
     try:
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
-        time_per_bread = {bread.bread_type_id: bread.cook_time_s for bread in bakery_breads}
+        time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
-        # Save into Redis hash
         key = f"bakery:{bakery_id}:time_per_bread"
         if time_per_bread:
-            # overwrite existing values
-            await r.delete(key)
-            await r.hset(key, mapping={str(k): v for k, v in time_per_bread.items()})
+            await r.set(key, json.dumps(time_per_bread))
 
         return time_per_bread
     finally:

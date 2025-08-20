@@ -19,40 +19,24 @@ def log_and_report_error(context: str, error: Exception, extra: dict = None):
     logger.error(
         context, extra={"error": str(error), "traceback": tb, **extra}
     )
-    report_error_telegram.delay(context, error, error_id, extra)
+    report_error_telegram.delay(context, error.__class__.__name__, str(error), extra)
 
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def report_error_telegram(context, e, error_id, extra: dict = None):
+def report_error_telegram(context, err_type, err_str, extra: dict = None):
+    """
+    Object of type ZeroDivisionError is not JSON serializable--cant send error object directly
+    """
     err = (
-        f"🔴 [Error]:"
-        f"\n\n{context}"
-        f"\n\nError type:{type(e)}"
-        f"\nError reason: {str(e)}"
-        f"\nErrorID: {error_id}"
+        f"🔴 {context}:"
+        f"\n\nError type: {err_type}"
+        f"\nError reason: {err_str}"
         f"\n\nExtera Info:"
         f"\n{extra}"
     )
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": err, 'message_thread_id': ERR_THREAD_ID}
     requests.post(url, data=data, timeout=5)
-
-@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def initialize(bakery_id, bread_type_and_cook_time):
-    db = SessionLocal()
-    try:
-        crud.delete_all_corresponding_bakery_bread(db, bakery_id)
-        crud.add_bakery_bread_entries(db, bakery_id, bread_type_and_cook_time)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        log_and_report_error(
-            "Celery task: initialize", e,
-            {"bakery_id": bakery_id, "bread_time_and_cook_time": bread_type_and_cook_time}
-        )
-        raise e
-    finally:
-        db.close()
 
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})

@@ -28,7 +28,7 @@ async def home(request: Request):
 async def queue_check(request: Request, b: int, r: int):
     data = await decode_access_token(request)
     reservation_dict = algorithm.get_bakery_reservations(request.app.state.redis, b)
-    bread_time = algorithm.get_bakery_time_per_bread(request.app.state.redis, b)
+    bread_time = await algorithm.get_bakery_time_per_bread(request.app.state.redis, b)
 
     if not bread_time:
         return {'msg': 'bakery does not exist'}
