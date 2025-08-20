@@ -38,7 +38,6 @@ def get_token(bakery_id):
 def verify_bakery_token(token: str, bakery_id: int) -> bool:
     return get_token(bakery_id) == token
 
-
 class TokenBlacklist:
     def __init__(self, r):
         self.r = r

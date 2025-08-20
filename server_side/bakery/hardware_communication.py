@@ -15,7 +15,7 @@ def validate_token(authorization: str = Header(...)) -> str:
         raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
     return authorization[len("Bearer "):]
 
-@router.post('/nc')
+@router.put('/nc')
 async def new_customer(
     request: Request,
     customer: schemas.NewCustomerRequirement,
@@ -24,25 +24,24 @@ async def new_customer(
     if not verify_bakery_token(token, customer.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    breads_type = await algorithm.get_bakery_time_per_bread(request.state.redis, customer.bakery_id)
-
-    if sorted(breads_type.keys()) != sorted(customer.bread_requirements.keys()):
+    breads_type = await algorithm.get_bakery_time_per_bread(request.app.state.redis, customer.bakery_id)
+    if breads_type.keys() != customer.bread_requirements.keys():
         raise HTTPException(status_code=400, detail="invalid bread types")
 
-    await algorithm.add_customer_to_reservation_dict(request.state.redis, customer.bakery_id, customer.bread_requirements)
-    tasks.register_new_customer.delay(customer.bakery_id, customer.bread_requirements)
-    return {'status': 'Processing'}
+    reservation_dict = await algorithm.get_bakery_reservations(request.app.state.redis, customer.bakery_id)
+    customer_ticket_id = algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values())
+
+    await algorithm.add_customer_to_reservation_dict(request.app.state.redis, customer.bakery_id, customer_ticket_id, customer.bread_requirements)
+    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, customer.bread_requirements)
+    return {'status': 'successful', 'customer_ticket_id': customer_ticket_id}
 
 
 @router.post('/nt')
 async def next_ticket(
     ticket: schemas.NextTicketRequirement,
-    authorization: Optional[str] = Header(None)
+    token: str = Depends(validate_token)
 ):
-    if authorization is None or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
 
-    token = authorization[len("Bearer "):]
     if not verify_bakery_token(token, ticket.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
     tasks.next_ticket_process.delay(ticket.current_customer_id, ticket.bakery_id)

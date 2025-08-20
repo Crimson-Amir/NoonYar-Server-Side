@@ -15,8 +15,7 @@ class Algorithm:
         keys = sorted(reservation_dict.keys())
 
         if not keys:
-            reservation_dict[1] = bread_counts
-            return
+            return 1
 
         last_key = keys[-1]
         last_sum = sum(reservation_dict[last_key])
@@ -24,11 +23,10 @@ class Algorithm:
         if total == 1:
             for i in range(len(keys) - 1):
                 if sum(reservation_dict[keys[i]]) > 1 and sum(reservation_dict[keys[i + 1]]) > 1:
-                    reservation_dict[keys[i] + 1] = bread_counts
-                    return
+                    return keys[i] + 1
 
             new_key = 1 if not keys else keys[-1] + (2 if last_sum == 1 else 1)
-            reservation_dict[new_key] = bread_counts
+            return new_key
 
         else:
             last_multiple = 0
@@ -37,14 +35,13 @@ class Algorithm:
                     last_multiple = key
                     break
             distance = (keys[-1] - last_multiple) // 2
+
             if last_multiple == last_key:
-                reservation_dict[last_key + 2] = bread_counts
-
+                return last_key + 2
             elif distance < total and last_sum == 1:
-                reservation_dict[last_key + 1] = bread_counts
-
+                return last_key + 1
             else:
-                reservation_dict[last_multiple + (total * 2)] = bread_counts
+                return last_multiple + (total * 2)
 
     @staticmethod
     def compute_bread_time(time_per_bread, reserve):
@@ -89,7 +86,7 @@ async def get_bakery_reservations(r, bakery_id: int):
     reservations = await r.hgetall(key)
 
     if reservations:
-        return {int(k): json.loads(v) for k, v in reservations.items()}
+        return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()}
 
     db = SessionLocal()
     try:
@@ -103,7 +100,7 @@ async def get_bakery_reservations(r, bakery_id: int):
             reservation_dict[customer.id] = reservation
 
         if reservation_dict:
-            await r.hset(key, mapping={str(k): json.dumps(v) for k, v in reservation_dict.items()})
+            await r.hset(key, mapping={str(k): ",".join(map(str, v)) for k, v in reservation_dict.items()})
 
         return reservation_dict
     finally:
@@ -136,7 +133,7 @@ async def get_bakery_time_per_bread(r, bakery_id: int):
         db.close()
 
 
-async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[int, int]):
+async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[str, int]):
     """
     Add or update a customer's reservation in Redis.
     - bread_count_data: {bread_type_id: count}
@@ -145,10 +142,12 @@ async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, 
     reservations_key = f"bakery:{bakery_id}:reservations"
 
     # Ensure reservation list matches the order of time_per_bread keys
-    reservation = [bread_count_data.get(int(bread_id), 0) for bread_id in time_per_bread.keys()]
+    reservation = [bread_count_data.get(bread_id, 0) for bread_id in time_per_bread.keys()]
 
     # Save to Redis
-    await r.hset(reservations_key, str(customer_id), json.dumps(reservation))
+    encoded = ",".join(map(str, reservation))
+    await r.hset(reservations_key, str(customer_id), encoded)
+
 
 async def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
     """

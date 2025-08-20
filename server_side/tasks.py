@@ -40,10 +40,10 @@ def report_error_telegram(context, err_type, err_str, extra: dict = None):
 
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def register_new_customer(hardware_customer_id, bakery_id, bread_requirements):
+def register_new_customer(customer_ticket_id, bakery_id, bread_requirements):
     db = SessionLocal()
     try:
-        c_id = crud.new_customer_no_commit(db, hardware_customer_id, bakery_id, True)
+        c_id = crud.new_customer_no_commit(db, customer_ticket_id, bakery_id, True)
         for bread_id, count in bread_requirements.items():
             crud.new_bread_customer(db, c_id, int(bread_id), count)
         db.commit()
@@ -51,7 +51,7 @@ def register_new_customer(hardware_customer_id, bakery_id, bread_requirements):
         db.rollback()
         log_and_report_error(
             "Celery task: register_new_customer", e,
-            {"hardware_customer_id": hardware_customer_id,
+            {"hardware_customer_id": customer_ticket_id,
              "bakery_id": bakery_id, "bread_requirements": bread_requirements}
         )
         raise e
