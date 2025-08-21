@@ -77,18 +77,85 @@ class Algorithm:
 
         return consecutive_empty + consecutive_full
 
-async def get_bakery_reservations(r, bakery_id: int):
+
+async def get_customer_reservation_detail(r, bakery_id: int, customer_id: int) -> dict[str, int] | None:
     """
-    Fetch reservations for a bakery.
-    Structure: {customer_id: [bread_counts]}
+    Return a dict mapping bread_type_id -> count for a specific customer,
+    aligned with bakery's time_per_bread order.
+
+    Example:
+      time_per_bread = {"1": 60, "2": 30, "3": 25}
+      reservation_str = "4,5,1"
+      -> {1: 4, 2: 5, 3: 1}
     """
+    # Keys (bread order) come from time_per_bread
+    tp_key = f"bakery:{bakery_id}:time_per_bread"
+    res_key = f"bakery:{bakery_id}:reservations"
+
+    # Load time_per_bread
+    tp_raw = await r.get(tp_key)
+    if not tp_raw:
+        return None
+    time_per_bread = json.loads(tp_raw)  # dict[str, int]
+
+    # Load reservation string for this customer
+    reservation_str = await r.hget(res_key, str(customer_id))
+    if not reservation_str:
+        return None
+
+    # Split counts and align with time_per_bread keys
+    counts = list(map(int, reservation_str.split(",")))
+    bread_ids = list(time_per_bread.keys())
+
+    # Defensive check in case of mismatch
+    if len(counts) != len(bread_ids):
+        raise ValueError("Reservation length mismatch with time_per_bread")
+
+    return {bid: count for bid, count in zip(bread_ids, counts)}
+
+
+async def customer_exists_in_reservations(r, bakery_id: int, customer_ticket_id: int) -> bool:
+    reservations_key = f"bakery:{bakery_id}:reservations"
+    return await r.hexists(reservations_key, str(customer_ticket_id))
+
+async def _ensure_order_from_reservations(r, bakery_id: int) -> None:
     reservations_key = f"bakery:{bakery_id}:reservations"
     order_key = f"bakery:{bakery_id}:reservation_order"
 
-    reservations = await r.hgetall(reservations_key)
+    # If reservations exist but order is empty/missing, rebuild order from hash keys
+    hlen = await r.hlen(reservations_key)
+    zcard = await r.zcard(order_key)
 
-    if reservations:
-        return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()}
+    if hlen > 0 and zcard == 0:
+        members = await r.hkeys(reservations_key)  # ["1","2","4",...]
+        if members:
+            mapping = {mid: int(mid) for mid in members}  # score = ticket_no
+            await r.zadd(order_key, mapping)
+
+
+async def get_current_ticket_id(r, bakery_id: int) -> int | None:
+    order_key = f"bakery:{bakery_id}:reservation_order"
+
+    ids = await r.zrange(order_key, 0, 0)
+    if ids:
+        return int(ids[0])
+
+    await _ensure_order_from_reservations(r, bakery_id)
+    ids = await r.zrange(order_key, 0, 0)
+    if ids:
+        return int(ids[0])
+
+    return None
+
+async def get_bakery_reservations(r, bakery_id: int):
+    reservations_key = f"bakery:{bakery_id}:reservations"
+
+    # Check if key exists at all
+    if await r.exists(reservations_key):
+        reservations = await r.hgetall(reservations_key)
+        return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()} if reservations else {}
+
+    order_key = f"bakery:{bakery_id}:reservation_order"
 
     db = SessionLocal()
     try:
@@ -97,14 +164,15 @@ async def get_bakery_reservations(r, bakery_id: int):
 
         reservation_dict = {}
         pipe = r.pipeline()
+        pipe.delete(order_key)
 
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
             reservation = [bread_counts.get(int(bid), 0) for bid in time_per_bread.keys()]
-            reservation_dict[customer.id] = reservation
+            reservation_dict[customer.hardware_customer_id] = reservation
 
-            pipe.hset(reservations_key, str(customer.id), ",".join(map(str, reservation)))
-            pipe.zadd(order_key, {str(customer.id): customer.id})
+            pipe.hset(reservations_key, str(customer.hardware_customer_id), ",".join(map(str, reservation)))
+            pipe.zadd(order_key, {str(customer.hardware_customer_id): customer.hardware_customer_id})
 
         if reservation_dict:
             await pipe.execute()
