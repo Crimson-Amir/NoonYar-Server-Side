@@ -76,10 +76,19 @@ def new_customer_no_commit(db: Session, hardware_customer_id, bakery_id, is_in_q
     return customer.id
 
 
-def new_bread_customer(db: Session, customer_id, bread_type_id, count):
-    customer_bread = models.CustomerBread(customer_id=customer_id, bread_type_id=bread_type_id, count=count)
-    db.add(customer_bread)
-
+def new_bread_customers(db: Session, customer_id: int, bread_requirements: dict[str, int]):
+    """
+    Insert all bread requirements for a customer in one batch.
+    """
+    objs = [
+        models.CustomerBread(
+            customer_id=customer_id,
+            bread_type_id=int(bread_id),
+            count=count,
+        )
+        for bread_id, count in bread_requirements.items()
+    ]
+    db.add_all(objs)
 
 def update_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
     customer = (

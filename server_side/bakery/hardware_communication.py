@@ -1,4 +1,3 @@
-from typing import Optional
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
 import crud, algorithm
 from utilities import verify_bakery_token
@@ -22,11 +21,11 @@ async def new_customer(
     token: str = Depends(validate_token)
 ):
     if not verify_bakery_token(token, customer.bakery_id):
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Invalid bakery token")
 
     breads_type = await algorithm.get_bakery_time_per_bread(request.app.state.redis, customer.bakery_id)
     if breads_type.keys() != customer.bread_requirements.keys():
-        raise HTTPException(status_code=400, detail="invalid bread types")
+        raise HTTPException(status_code=400, detail="Invalid bread types")
 
     reservation_dict = await algorithm.get_bakery_reservations(request.app.state.redis, customer.bakery_id)
     customer_ticket_id = algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values())
@@ -44,6 +43,7 @@ async def next_ticket(
 
     if not verify_bakery_token(token, ticket.bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
+
     tasks.next_ticket_process.delay(ticket.current_customer_id, ticket.bakery_id)
     return {'status': 'Processing'}
 

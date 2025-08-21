@@ -82,8 +82,10 @@ async def get_bakery_reservations(r, bakery_id: int):
     Fetch reservations for a bakery.
     Structure: {customer_id: [bread_counts]}
     """
-    key = f"bakery:{bakery_id}:reservations"
-    reservations = await r.hgetall(key)
+    reservations_key = f"bakery:{bakery_id}:reservations"
+    order_key = f"bakery:{bakery_id}:reservation_order"
+
+    reservations = await r.hgetall(reservations_key)
 
     if reservations:
         return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()}
@@ -91,16 +93,21 @@ async def get_bakery_reservations(r, bakery_id: int):
     db = SessionLocal()
     try:
         today_customers = crud.get_today_customers(db, bakery_id)
-        time_per_bread = await get_bakery_time_per_bread(r, bakery_id)  # reuse other function
+        time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
 
         reservation_dict = {}
+        pipe = r.pipeline()
+
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
-            reservation = [bread_counts.get(int(bread_id), 0) for bread_id in time_per_bread.keys()]
+            reservation = [bread_counts.get(int(bid), 0) for bid in time_per_bread.keys()]
             reservation_dict[customer.id] = reservation
 
+            pipe.hset(reservations_key, str(customer.id), ",".join(map(str, reservation)))
+            pipe.zadd(order_key, {str(customer.id): customer.id})
+
         if reservation_dict:
-            await r.hset(key, mapping={str(k): ",".join(map(str, v)) for k, v in reservation_dict.items()})
+            await pipe.execute()
 
         return reservation_dict
     finally:
@@ -136,17 +143,18 @@ async def get_bakery_time_per_bread(r, bakery_id: int):
 async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[str, int]):
     """
     Add or update a customer's reservation in Redis.
-    - bread_count_data: {bread_type_id: count}
     """
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
     reservations_key = f"bakery:{bakery_id}:reservations"
+    order_key = f"bakery:{bakery_id}:reservation_order"
 
-    # Ensure reservation list matches the order of time_per_bread keys
-    reservation = [bread_count_data.get(bread_id, 0) for bread_id in time_per_bread.keys()]
-
-    # Save to Redis
+    reservation = [bread_count_data.get(bid, 0) for bid in time_per_bread.keys()]
     encoded = ",".join(map(str, reservation))
-    await r.hset(reservations_key, str(customer_id), encoded)
+
+    pipe = r.pipeline()
+    pipe.hset(reservations_key, str(customer_id), encoded)
+    pipe.zadd(order_key, {str(customer_id): customer_id})
+    await pipe.execute()
 
 
 async def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
@@ -154,7 +162,12 @@ async def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: 
     Remove a single customer's reservation from Redis.
     """
     reservations_key = f"bakery:{bakery_id}:reservations"
-    await r.hdel(reservations_key, str(customer_id))
+    order_key = f"bakery:{bakery_id}:reservation_order"
+
+    pipe = r.pipeline()
+    pipe.hdel(reservations_key, str(customer_id))
+    pipe.zrem(order_key, str(customer_id))
+    await pipe.execute()
 
 
 async def reset_time_per_bread(r, bakery_id: int):

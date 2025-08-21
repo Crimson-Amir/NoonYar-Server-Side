@@ -25,8 +25,7 @@ class NewCustomerRequirement(BakeryID):
     bread_requirements: Dict[str, int]
 
 class NextTicketRequirement(BakeryID):
-    current_customer_id: int
-    next_customer_id: int
+    customer_ticket_id: int
 
 class Initialize(BakeryID):
     bread_type_id_and_cook_time: Dict[str, int]

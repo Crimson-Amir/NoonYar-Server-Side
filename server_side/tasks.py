@@ -44,8 +44,7 @@ def register_new_customer(customer_ticket_id, bakery_id, bread_requirements):
     db = SessionLocal()
     try:
         c_id = crud.new_customer_no_commit(db, customer_ticket_id, bakery_id, True)
-        for bread_id, count in bread_requirements.items():
-            crud.new_bread_customer(db, c_id, int(bread_id), count)
+        crud.new_bread_customers(db, c_id, bread_requirements)
         db.commit()
     except Exception as e:
         db.rollback()
