@@ -1,4 +1,6 @@
-import crud, requests, algorithm, utilities
+from asyncio import timeout
+
+import crud, requests
 from celery import Celery
 from database import SessionLocal
 from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
@@ -6,6 +8,7 @@ from private import SMS_KEY
 import redis, traceback
 from uuid import uuid4
 from logger_config import logger
+from helpers.token_helpers import OTPStore
 
 celery_app = Celery(
     "tasks",
@@ -19,25 +22,23 @@ def log_and_report_error(context: str, error: Exception, extra: dict = None):
     logger.error(
         context, extra={"error": str(error), "traceback": tb, **extra}
     )
-    report_error_telegram.delay(context, error.__class__.__name__, str(error), extra)
-
-
-@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def report_error_telegram(context, err_type, err_str, extra: dict = None):
-    """
-    Object of type ZeroDivisionError is not JSON serializable--cant send error object directly
-    """
-    err = (
+    err_msg = (
         f"🔴 {context}:"
-        f"\n\nError type: {err_type}"
-        f"\nError reason: {err_str}"
+        f"\n\nError type: {type(error)}"
+        f"\nError reason: {str(error)}"
         f"\n\nExtera Info:"
         f"\n{extra}"
     )
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": err, 'message_thread_id': ERR_THREAD_ID}
-    requests.post(url, data=data, timeout=5)
+    report_to_admin_api.delay(err_msg)
 
+@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+def report_to_admin_api(msg, message_thread_id=ERR_THREAD_ID):
+    json_data = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
+    requests.post(
+        url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json=json_data,
+        timeout=10
+    )
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def register_new_customer(customer_ticket_id, bakery_id, bread_requirements):
@@ -92,7 +93,7 @@ def send_otp(mobile_number, code, expire_m=10):
         response = requests.post(url, json=data, headers=headers, timeout=10)
         if response.status_code == 200:
             r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-            otp_store = utilities.OTPStore(r)
+            otp_store = OTPStore(r)
             otp_store.set_otp(mobile_number, code, expire_m * 60)
             response_json = response.json()
             return {"status": response_json['status'], "message": "OTP sent successfully",

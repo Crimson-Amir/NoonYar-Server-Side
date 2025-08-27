@@ -4,24 +4,13 @@ from database import SessionLocal
 import logging
 
 logging.getLogger("app")
+bakery_token = {}
 
 def hash_otp(code: str) -> str:
     return hashlib.sha256(str(code).encode()).hexdigest()[:24]
 
 def get_expiry(minutes=10):
     return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
-
-def set_cookie(response, key, value, max_age):
-    response.set_cookie(
-        key=key,
-        value=value,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        max_age=max_age
-    )
-
-bakery_token = {}
 
 def get_token(bakery_id):
     if bakery_id not in bakery_token:
@@ -34,6 +23,15 @@ def get_token(bakery_id):
             db.close()
     return bakery_token[bakery_id]
 
+def set_cookie(response, key, value, max_age):
+    response.set_cookie(
+        key=key,
+        value=value,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=max_age
+    )
 
 def verify_bakery_token(token: str, bakery_id: int) -> bool:
     return get_token(bakery_id) == token
@@ -47,7 +45,6 @@ class TokenBlacklist:
         return await self.r.exists(token) == 1
 
 
-# services/otp.py
 class OTPStore:
     def __init__(self, r):
         self.r = r
@@ -66,4 +63,3 @@ class OTPStore:
             return False
         await self.r.delete(key)
         return True
-

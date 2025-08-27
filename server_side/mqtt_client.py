@@ -2,7 +2,7 @@ import json
 import threading
 import paho.mqtt.client as mqtt
 from tasks import register_new_customer, next_ticket_process
-from utilities import verify_bakery_token
+from helpers.token_helpers import verify_bakery_token
 
 BROKER_HOST = "localhost"
 BROKER_PORT = 1883

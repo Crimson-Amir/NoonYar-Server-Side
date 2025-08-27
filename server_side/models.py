@@ -1,7 +1,6 @@
 import secrets
-
 from celery.worker.strategy import default
-
+from sqlalchemy.types import Unicode
 from database import Base
 from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger
 from datetime import datetime
@@ -50,7 +49,7 @@ class BreadType(Base):
     __tablename__ = 'bread_type'
 
     bread_id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)
+    name = Column(Unicode(255), unique=True, nullable=False)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     bakery_associations = relationship("BakeryBread", back_populates="bread", cascade="all, delete-orphan")

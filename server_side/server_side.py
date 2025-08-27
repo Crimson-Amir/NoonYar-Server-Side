@@ -8,10 +8,10 @@ from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORI
 from user import authentication, user
 from bakery import hardware_communication, management
 from admin import manage
-import utilities
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from mqtt_client import start_mqtt
+from helpers.token_helpers import TokenBlacklist, set_cookie
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,7 +45,7 @@ async def authenticate_request(request: Request, call_next):
     request.state.user = None
     access_token = request.cookies.get("access_token")
     refresh_token = request.cookies.get("refresh_token")
-    blacklist = utilities.TokenBlacklist(request.app.state.redis)
+    blacklist = TokenBlacklist(request.app.state.redis)
 
     if access_token:
         try:
@@ -71,7 +71,7 @@ async def authenticate_request(request: Request, call_next):
 
             request.state.user = jwt.decode(new_token, SECRET_KEY, algorithms=["HS256"])
             response = await call_next(request)
-            utilities.set_cookie(response, "access_token", new_token, ACCESS_TOKEN_EXP_MIN * 60)
+            set_cookie(response, "access_token", new_token, ACCESS_TOKEN_EXP_MIN * 60)
             return response
         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
             return JSONResponse(status_code=401, content={"detail": "Invalid or expierd refresh token"})

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
 import crud, algorithm
-from utilities import verify_bakery_token
+from helpers.token_helpers import verify_bakery_token 
 import schemas, tasks, algorithm
 from database import SessionLocal
 
@@ -32,15 +32,11 @@ async def new_customer(
     reservation_dict = await algorithm.get_bakery_reservations(r, customer.bakery_id)
     customer_ticket_id = algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values())
 
-    if await algorithm.customer_exists_in_reservations(r, customer.bakery_id, customer_ticket_id):
-        tasks.log_and_report_error(
-            "hardware_communication: new_customer",
-            ValueError(f"Ticket {customer_ticket_id} already exists"),
-            {
-                "customer_ticket_id": customer_ticket_id,
-                "bakery_id": customer.bakery_id
-            }
-        )
+    success = await algorithm.add_customer_to_reservation_dict(
+        r, customer.bakery_id, customer_ticket_id, customer.bread_requirements
+    )
+
+    if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
     await algorithm.add_customer_to_reservation_dict(r, customer.bakery_id, customer_ticket_id, customer.bread_requirements)
@@ -59,6 +55,28 @@ async def next_ticket(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     r = request.app.state.redis
+
+    pipe1 = r.pipeline()
+    order_key = f"bakery:{ticket.bakery_id}:reservation_order"
+    pipe1.zrange(order_key, 0, 0)
+
+    time_key = f"bakery:{ticket.bakery_id}:time_per_bread"
+    res_key = f"bakery:{ticket.bakery_id}:reservations"
+
+    # queue commands
+    pipe1.hgetall(time_key)
+    pipe1.hget(res_key, str(ticket.customer_ticket_id))
+
+    reservations_key = f"bakery:{ticket.bakery_id}:reservations"
+    order_key = f"bakery:{ticket.bakery_id}:reservation_order"
+
+    pipe1.hdel(reservations_key, str(ticket.customer_ticket_id))
+    pipe1.zrem(order_key, str(ticket.customer_ticket_id))
+
+    current_ticket_id, time_per_bread, reservation_dict, del1, del2 = await pipe1.execute()
+    print(current_ticket_id, time_per_bread, reservation_dict, del1, del2)
+    return
+
     current_ticket_id = await algorithm.get_current_ticket_id(r, ticket.bakery_id)
 
     if current_ticket_id is None:
@@ -75,8 +93,10 @@ async def next_ticket(
     detail = await algorithm.get_customer_reservation_detail(r, ticket.bakery_id, current_ticket_id)
     await algorithm.remove_customer_from_reservation_dict(r, ticket.bakery_id, current_ticket_id)
     next_ticket_id = await algorithm.get_current_ticket_id(r, ticket.bakery_id) or None
+    next_reservation_detail = await algorithm.get_customer_reservation_detail(r, ticket.bakery_id, next_ticket_id)
     tasks.next_ticket_process.delay(ticket.customer_ticket_id, ticket.bakery_id)
-    return {'status': 'successful', 'next_ticket_id': next_ticket_id, "detail": detail}
+    return {'status': 'successful', 'next_ticket_id': next_ticket_id, "detail": detail, "next_reservation_detail": next_reservation_detail}
+
 
 
 @router.get('/hardware_init')

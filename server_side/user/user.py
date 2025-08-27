@@ -27,33 +27,39 @@ async def home(request: Request):
 @router.get("/res/")
 async def queue_check(request: Request, b: int, r: int):
     data = await decode_access_token(request)
-    reservation_dict = algorithm.get_bakery_reservations(request.app.state.redis, b)
+
+    reservation_dict = await algorithm.get_bakery_reservations(request.app.state.redis, b)
     bread_time = await algorithm.get_bakery_time_per_bread(request.app.state.redis, b)
+    bread_names = await algorithm.get_bakery_bread_names(request.app.state.redis)
 
     if not bread_time:
         return {'msg': 'bakery does not exist'}
     if not reservation_dict:
         return {'msg': 'queue is empty'}
 
-    sorted_keys = sorted(reservation_dict)
+    sorted_keys = sorted(reservation_dict.keys())
     algorithm_instance = Algorithm()
 
-    is_user_exist = r in reservation_dict
+    is_user_exist = r in sorted_keys
     reservation_number = r if is_user_exist else sorted_keys[-1]
-
     people_in_queue = sum(1 for key in sorted_keys if key < reservation_number)
     average_bread_time = sum(bread_time.values()) // len(bread_time)
 
-    exist_customer_time = algorithm_instance.exist_customer_time(
+    in_queue_customers_time = algorithm_instance.calculate_in_queue_customers_time(
         sorted_keys, reservation_number, reservation_dict, bread_time)
 
     empty_slot_time = algorithm_instance.compute_empty_slot_time(
         sorted_keys, reservation_number, reservation_dict) * average_bread_time
+    
+    bread_ids = bread_time.keys()
+    user_breads = {
+        bread_names.get(bid, bid): count for bid, count in zip(bread_ids, reservation_dict.get(reservation_number, []))} if is_user_exist else None
 
     return {
         "is_user_exist": is_user_exist,
         "people_in_queue": people_in_queue,
-        "empty_slot_time": empty_slot_time,
-        "exist_customer_time_s": exist_customer_time,
+        "empty_slot_time_avg": empty_slot_time,
+        "in_queue_customers_time": in_queue_customers_time,
+        "user_breads": user_breads,
         "data": data
     }

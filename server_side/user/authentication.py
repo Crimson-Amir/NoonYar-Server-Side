@@ -1,11 +1,12 @@
 from fastapi import Request, Depends, Response, APIRouter, HTTPException, Cookie
 from fastapi.responses import RedirectResponse
-import schemas, crud, tasks, utilities, private
+import schemas, crud, tasks, private
 from sqlalchemy.orm import Session
 from auth import create_access_token, create_refresh_token, hash_password_md5, decode_token
 from database import SessionLocal
 from datetime import timedelta
 import random, time
+from helpers.token_helpers import TokenBlacklist, set_cookie, OTPStore, hash_otp
 
 router = APIRouter(
     prefix='/auth',
@@ -21,13 +22,13 @@ async def otp_verification(db, phone_number, user_code):
     otp = crud.get_otp(db, phone_number)
     if not otp:
         raise HTTPException(status_code=400, detail='OTP not found or expired')
-    if otp.hashed_code != utilities.hash_otp(user_code):
+    if otp.hashed_code != hash_otp(user_code):
         raise HTTPException(status_code=400, detail='OTP is not correct')
     return otp
 
 @router.post("/verify-signup-otp")
 async def verify_signup_otp(request: Request, response: Response, data: schemas.LogInValue):
-    otp_store = utilities.OTPStore(request.app.state.redis)
+    otp_store = OTPStore(request.app.state.redis)
     if not await otp_store.verify_otp(data.phone_number, data.code):
         raise HTTPException(status_code=400, detail="OTP not found or incorrect")
 
@@ -36,7 +37,7 @@ async def verify_signup_otp(request: Request, response: Response, data: schemas.
         expires_delta=timedelta(minutes=private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
     )
 
-    utilities.set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
     return {"status": "OK"}
 
 @router.post('/sign-up/')
@@ -67,8 +68,8 @@ async def create_user(user: schemas.SignUpRequirement, response: Response, tempo
     access_token = create_access_token(data=user_data)
     cr_refresh_token = create_refresh_token(data=user_data)
 
-    utilities.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
-    utilities.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
 
     response.delete_cookie("temporary_sign_up_token")
 
@@ -96,7 +97,7 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
 
 @router.post('/verify-login')
 async def verify_login(request: Request, response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
-    otp_store = utilities.OTPStore(request.app.state.redis)
+    otp_store = OTPStore(request.app.state.redis)
 
     if not await otp_store.verify_otp(data.phone_number, data.code):
         raise HTTPException(status_code=400, detail="OTP not found or incorrect")
@@ -114,15 +115,15 @@ async def verify_login(request: Request, response: Response, data: schemas.LogIn
     access_token = create_access_token(data=user_data)
     cr_refresh_token = create_refresh_token(data=user_data)
 
-    utilities.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
-    utilities.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
 
     return {'status': 'OK', 'user_id': db_user.user_id}
 
 @router.post('/logout')
 async def logout(request: Request):
     redirect = RedirectResponse('/home/', status_code=303)
-    blacklist = utilities.TokenBlacklist(request.app.state.redis)
+    blacklist = TokenBlacklist(request.app.state.redis)
 
     # Access token
     access_token = request.cookies.get("access_token")

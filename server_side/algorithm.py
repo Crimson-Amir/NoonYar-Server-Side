@@ -1,4 +1,4 @@
-import crud
+import crud, private
 from database import SessionLocal
 import json
 from typing import List, Dict
@@ -23,10 +23,12 @@ class Algorithm:
         if total == 1:
             for i in range(len(keys) - 1):
                 if sum(reservation_dict[keys[i]]) > 1 and sum(reservation_dict[keys[i + 1]]) > 1:
-                    return keys[i] + 1
+                    new_key = keys[i] + 1
+                    while new_key in reservation_dict:
+                        new_key += 1
+                    return new_key
 
             new_key = 1 if not keys else keys[-1] + (2 if last_sum == 1 else 1)
-            return new_key
 
         else:
             last_multiple = 0
@@ -37,17 +39,23 @@ class Algorithm:
             distance = (keys[-1] - last_multiple) // 2
 
             if last_multiple == last_key:
-                return last_key + 2
+                new_key = last_key + 2
             elif distance < total and last_sum == 1:
-                return last_key + 1
+                new_key = last_key + 1
             else:
-                return last_multiple + (total * 2)
+                new_key = last_multiple + (total * 2)
+
+        while new_key in reservation_dict:
+            new_key += 1
+
+        return new_key
 
     @staticmethod
     def compute_bread_time(time_per_bread, reserve):
-        return sum(bread * time_per_bread.get(index, 1) for index, bread in enumerate(reserve))
+        return sum(bread * time_per_bread.get(str(index), private.DEFAULT_BREAD_COOK_TIME_SECOND)
+                   for index, bread in enumerate(reserve, start=1))
 
-    def exist_customer_time(self, keys, index, reservation_dict, time_per_bread):
+    def calculate_in_queue_customers_time(self, keys, index, reservation_dict, time_per_bread):
         return sum(
             self.compute_bread_time(time_per_bread, reservation_dict[key])
             for key in keys
@@ -58,7 +66,7 @@ class Algorithm:
     def compute_empty_slot_time(keys, index, reservation_dict):
         consecutive_empty, consecutive_full = 0, 0
 
-        prev_sum = sum(reservation_dict[keys[0]]) if keys else 0  # Handle empty keys case
+        prev_sum = sum(reservation_dict[keys[0]]) if keys else 0
 
         for i in range(1, len(keys)):
             curr_sum = sum(reservation_dict[keys[i]])
@@ -76,47 +84,6 @@ class Algorithm:
             prev_sum = curr_sum
 
         return consecutive_empty + consecutive_full
-
-
-async def get_customer_reservation_detail(r, bakery_id: int, customer_id: int) -> dict[str, int] | None:
-    """
-    Return a dict mapping bread_type_id -> count for a specific customer,
-    aligned with bakery's time_per_bread order.
-
-    Example:
-      time_per_bread = {"1": 60, "2": 30, "3": 25}
-      reservation_str = "4,5,1"
-      -> {1: 4, 2: 5, 3: 1}
-    """
-    # Keys (bread order) come from time_per_bread
-    tp_key = f"bakery:{bakery_id}:time_per_bread"
-    res_key = f"bakery:{bakery_id}:reservations"
-
-    # Load time_per_bread
-    tp_raw = await r.get(tp_key)
-    if not tp_raw:
-        return None
-    time_per_bread = json.loads(tp_raw)  # dict[str, int]
-
-    # Load reservation string for this customer
-    reservation_str = await r.hget(res_key, str(customer_id))
-    if not reservation_str:
-        return None
-
-    # Split counts and align with time_per_bread keys
-    counts = list(map(int, reservation_str.split(",")))
-    bread_ids = list(time_per_bread.keys())
-
-    # Defensive check in case of mismatch
-    if len(counts) != len(bread_ids):
-        raise ValueError("Reservation length mismatch with time_per_bread")
-
-    return {bid: count for bid, count in zip(bread_ids, counts)}
-
-
-async def customer_exists_in_reservations(r, bakery_id: int, customer_ticket_id: int) -> bool:
-    reservations_key = f"bakery:{bakery_id}:reservations"
-    return await r.hexists(reservations_key, str(customer_ticket_id))
 
 async def _ensure_order_from_reservations(r, bakery_id: int) -> None:
     reservations_key = f"bakery:{bakery_id}:reservations"
@@ -146,6 +113,28 @@ async def get_current_ticket_id(r, bakery_id: int) -> int | None:
         return int(ids[0])
 
     return None
+
+async def get_customer_reservation_detail(
+    r, bakery_id: int, customer_id: int
+) -> dict[str, int] | None:
+
+    time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
+    if not time_per_bread:
+        return None
+
+    res_key = f"bakery:{bakery_id}:reservations"
+    reservation_str = await r.hget(res_key, str(customer_id))
+    if not reservation_str:
+        return None
+
+    counts = list(map(int, reservation_str.split(",")))
+    bread_ids = list(time_per_bread.keys())
+
+    if len(counts) != len(bread_ids):
+        raise ValueError("Reservation length mismatch with time_per_bread")
+
+    return {bid: count for bid, count in zip(bread_ids, counts)}
+
 
 async def get_bakery_reservations(r, bakery_id: int):
     reservations_key = f"bakery:{bakery_id}:reservations"
@@ -181,37 +170,70 @@ async def get_bakery_reservations(r, bakery_id: int):
     finally:
         db.close()
 
-
 async def get_bakery_time_per_bread(r, bakery_id: int):
     """
-    Fetch bread type -> cook time mapping for a bakery.
-    Stored in Redis as JSON string: {"1": 60, "2": 80, "3": 20}
+    Fetch bread_type_id -> cook_time_s mapping for a bakery.
+    Stored in Redis as a HASH: HSET bakery:{id}:time_per_bread {bread_id} {time}
     """
     key = f"bakery:{bakery_id}:time_per_bread"
-    raw = await r.get(key)
 
+    # Try Redis first
+    raw = await r.hgetall(key)
     if raw:
-        return json.loads(raw)  # Already sorted because DB query is sorted
+        return {k: int(v) for k, v in raw.items()}
 
     # Fallback: fetch from DB
     db = SessionLocal()
     try:
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
-
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
         if time_per_bread:
-            await r.set(key, json.dumps(time_per_bread))
+            # Store in Redis hash
+            await r.hset(key, mapping=time_per_bread)
 
         return time_per_bread
     finally:
         db.close()
 
 
-async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, bread_count_data: dict[str, int]):
-    """
-    Add or update a customer's reservation in Redis.
-    """
+async def get_bakery_bread_names(r):
+    key = "bread_names"
+    raw = await r.hgetall(key)
+    if raw:
+        return raw  # already {str: str}
+
+    db = SessionLocal()
+    try:
+        breads = crud.get_breads(db)
+        bread_names = {str(bread.bread_type_id): bread.name for bread in breads}
+
+        if bread_names:
+            await r.hset(key, mapping=bread_names)
+
+        return bread_names
+    finally:
+        db.close()
+
+
+LUA_ADD_RESERVATION = """
+    local reservations = KEYS[1]
+    local order = KEYS[2]
+    local ticket = ARGV[1]
+    local value = ARGV[2]
+    local score = tonumber(ARGV[1])
+        
+    -- Try insert
+    local ok = redis.call('HSETNX', reservations, ticket, value)
+    if ok == 1 then
+        redis.call('ZADD', order, score, ticket)
+    end
+    return ok
+"""
+
+async def add_customer_to_reservation_dict(
+        r, bakery_id: int, customer_id: int, bread_count_data: dict[str, int]
+) -> bool:
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
     reservations_key = f"bakery:{bakery_id}:reservations"
     order_key = f"bakery:{bakery_id}:reservation_order"
@@ -219,38 +241,54 @@ async def add_customer_to_reservation_dict(r, bakery_id: int, customer_id: int, 
     reservation = [bread_count_data.get(bid, 0) for bid in time_per_bread.keys()]
     encoded = ",".join(map(str, reservation))
 
-    pipe = r.pipeline()
-    pipe.hset(reservations_key, str(customer_id), encoded)
-    pipe.zadd(order_key, {str(customer_id): customer_id})
-    await pipe.execute()
+    script = r.register_script(LUA_ADD_RESERVATION)
+    result = await script(
+        keys=[reservations_key, order_key],
+        args=[str(customer_id), encoded],
+    )
 
+    return result == 1
 
-async def remove_customer_from_reservation_dict(r, bakery_id: int, customer_id: int):
+async def remove_customer_from_reservation_dict(pipe, bakery_id: int, customer_id: int):
     """
     Remove a single customer's reservation from Redis.
     """
     reservations_key = f"bakery:{bakery_id}:reservations"
     order_key = f"bakery:{bakery_id}:reservation_order"
 
-    pipe = r.pipeline()
     pipe.hdel(reservations_key, str(customer_id))
     pipe.zrem(order_key, str(customer_id))
-    await pipe.execute()
 
 
-async def reset_time_per_bread(r, bakery_id: int):
+async def reset_bakery_metadata(r, bakery_id: int):
     """
-    Refresh time_per_bread for a bakery from DB into Redis (JSON format).
+    Refresh bread metadata into Redis as HASHES (better than JSON).
     """
     db = SessionLocal()
     try:
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
-        key = f"bakery:{bakery_id}:time_per_bread"
         if time_per_bread:
-            await r.set(key, json.dumps(time_per_bread))
-
+            await r.delete(f"bakery:{bakery_id}:time_per_bread")
+            await r.hset(f"bakery:{bakery_id}:time_per_bread", mapping=time_per_bread)
         return time_per_bread
+    finally:
+        db.close()
+
+
+async def reset_bread_names(r):
+    """
+    Refresh bread metadata into Redis as HASHES (better than JSON).
+    """
+    db = SessionLocal()
+    try:
+        breads = crud.get_breads(db)
+        bread_names = {str(bread.bread_id): bread.name for bread in breads}
+
+        if bread_names:
+            await r.delete("bread_names")
+            await r.hset(f"bread_names", mapping=bread_names)
+        return bread_names
     finally:
         db.close()

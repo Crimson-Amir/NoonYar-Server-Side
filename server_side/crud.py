@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import update
+from sqlalchemy import update, case
 import models, schemas
 from auth import hash_password_md5
 import pytz
@@ -17,6 +17,9 @@ def get_bakery_breads(db: Session, bakery_id: int):
 
 def get_bakery(db: Session, bakery_id: int):
     return db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()
+
+def get_breads(db: Session):
+    return db.query(models.BreadType).all()
 
 def get_today_customers(db: Session, bakery_id: int):
     tehran = pytz.timezone('Asia/Tehran')
@@ -159,3 +162,20 @@ def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
     db.commit()
     db.refresh(new_admin)
     return new_admin
+
+
+
+def edit_bread_names(db: Session, bread_type_and_new_name: dict):
+    stmt = (
+        update(models.BreadType)
+        .where(models.BreadType.bread_id.in_(bread_type_and_new_name.keys()))
+        .values(
+            name=case(
+                *[(models.BreadType.bread_id == k, v)
+                  for k, v in bread_type_and_new_name.items()]
+            )
+        )
+    )
+    db.execute(stmt)
+    db.commit()
+
