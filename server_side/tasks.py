@@ -1,4 +1,3 @@
-from asyncio import timeout
 
 import crud, requests
 from celery import Celery
@@ -18,12 +17,13 @@ celery_app = Celery(
 def log_and_report_error(context: str, error: Exception, extra: dict = None):
     tb = traceback.format_exc()
     error_id = uuid4().hex
+    extra = extra or {}
     extra["error_id"] = error_id
     logger.error(
         context, extra={"error": str(error), "traceback": tb, **extra}
     )
     err_msg = (
-        f"🔴 {context}:"
+        f"[🔴 ERROR] {context}:"
         f"\n\nError type: {type(error)}"
         f"\nError reason: {str(error)}"
         f"\n\nExtera Info:"

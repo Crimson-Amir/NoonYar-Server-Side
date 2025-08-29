@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import update, case
+from sqlalchemy import update, case, select
 import models, schemas
 from auth import hash_password_md5
 import pytz
@@ -34,30 +34,6 @@ def get_today_customers(db: Session, bakery_id: int):
 
 def delete_all_corresponding_bakery_bread(db: Session, bakery_id: int):
     db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).delete()
-
-# def get_otp(db: Session, phone_number: str):
-#     otp_entry = db.query(models.OTP).filter(
-#         models.OTP.phone_number == phone_number,
-#         models.OTP.valid == True,
-#         models.OTP.exception_at > datetime.now(UTC)
-#     ).order_by(models.OTP.register_date.desc()).first()
-#     return otp_entry
-#
-# def invalidate_old_otps(db, phone_number: int):
-#     db.query(models.OTP).filter(
-#         models.OTP.phone_number == phone_number,
-#         models.OTP.valid == True
-#     ).update({models.OTP.valid: False})
-
-# def add_otp_to_db(db: Session, phone_number: int, hashed_code: str, valid: bool, expiration: datetime):
-#     otp = models.OTP(
-#         phone_number=phone_number,
-#         hashed_code=hashed_code,
-#         valid=valid,
-#         exception_at=expiration
-#     )
-#
-#     db.add(otp)
 
 def create_user(db: Session, user: schemas.SignUpRequirement):
     hash_password = hash_password_md5(user.password)
@@ -118,7 +94,6 @@ def add_bread(db: Session, bread: schemas.AddBread):
     db.refresh(bread_db)
     return bread_db
 
-
 def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_time: dict):
     new_entries = [
         models.BakeryBread(
@@ -163,8 +138,6 @@ def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
     db.refresh(new_admin)
     return new_admin
 
-
-
 def edit_bread_names(db: Session, bread_type_and_new_name: dict):
     stmt = (
         update(models.BreadType)
@@ -179,3 +152,48 @@ def edit_bread_names(db: Session, bread_type_and_new_name: dict):
     db.execute(stmt)
     db.commit()
 
+def add_new_skipped_customer(db: Session, customer_id, is_in_queu=True):
+    new_entry = models.SkippedCustomer(customer_id=customer_id, is_in_queu=is_in_queu)
+    db.add(new_entry)
+    db.commit()
+    return new_entry
+
+def get_today_skipped_customers(db: Session, bakery_id: int):
+    tehran = pytz.timezone('Asia/Tehran')
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    stmt = (
+        select(models.Customer)
+        .join(models.Customer.skipped_associations)  # join via relationship
+        .where(models.SkippedCustomer.is_in_queue == True,
+               models.Customer.register_date >= midnight_utc,
+               models.Customer.bakery_id == bakery_id)
+    )
+
+    return db.execute(stmt).scalars().all()
+
+# def get_otp(db: Session, phone_number: str):
+#     otp_entry = db.query(models.OTP).filter(
+#         models.OTP.phone_number == phone_number,
+#         models.OTP.valid == True,
+#         models.OTP.exception_at > datetime.now(UTC)
+#     ).order_by(models.OTP.register_date.desc()).first()
+#     return otp_entry
+#
+# def invalidate_old_otps(db, phone_number: int):
+#     db.query(models.OTP).filter(
+#         models.OTP.phone_number == phone_number,
+#         models.OTP.valid == True
+#     ).update({models.OTP.valid: False})
+
+# def add_otp_to_db(db: Session, phone_number: int, hashed_code: str, valid: bool, expiration: datetime):
+#     otp = models.OTP(
+#         phone_number=phone_number,
+#         hashed_code=hashed_code,
+#         valid=valid,
+#         exception_at=expiration
+#     )
+#
+#     db.add(otp)

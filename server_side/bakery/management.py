@@ -4,6 +4,8 @@ import schemas
 from sqlalchemy.orm import Session
 from helpers import endpoint_helper, redis_helper
 
+handle_errors = endpoint_helper.handle_endpoint_errors("bakery:management")
+
 router = APIRouter(
     prefix='/manage',
     tags=['management']
@@ -28,14 +30,14 @@ def require_admin(
     return user_id
 
 @router.post('/add_bakery', response_model=schemas.AddBakeryResult)
-@endpoint_helper.db_transaction
+@handle_errors
 async def add_bakery(bakery: schemas.AddBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bakery = crud.add_bakery(db, bakery)
     return bakery
 
 
 @router.post('/add_bread', response_model=schemas.BreadID)
-@endpoint_helper.db_transaction
+@handle_errors
 async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bread_id = crud.add_bread(db, bread)
     await redis_helper.reset_bread_names(request.app.state.redis)
@@ -43,7 +45,7 @@ async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Dep
 
 
 @router.put('/change_bread_names')
-@endpoint_helper.db_transaction
+@handle_errors
 async def change_bread_names(
         request: Request,
         data: schemas.ChangeBreadName,
@@ -57,7 +59,7 @@ async def change_bread_names(
 
 
 @router.post('/bakery_bread')
-@endpoint_helper.db_transaction
+@handle_errors
 async def bakery_bread(
         request: Request,
         data: schemas.Initialize,
@@ -72,7 +74,7 @@ async def bakery_bread(
 
 
 @router.put('/add_single_bread_to_bakery')
-@endpoint_helper.db_transaction
+@handle_errors
 async def add_single_bread_to_bakery(
     request: Request,
     data: schemas.AddSingleBreadToBakery,
@@ -85,7 +87,7 @@ async def add_single_bread_to_bakery(
 
 
 @router.delete('/remove_single_bread_from_bakery/{bakery_id}/{bread_id}')
-@endpoint_helper.db_transaction
+@handle_errors
 async def remove_single_bread_from_bakery(
     request: Request,
     bakery_id: int,

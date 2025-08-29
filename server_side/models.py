@@ -78,6 +78,7 @@ class Customer(Base):
 
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
+    skipped_associations = relationship("SkippedCustomer", back_populates="customer", cascade="all, delete-orphan")
     bakery = relationship("Bakery", back_populates="customers")
 
 
@@ -100,6 +101,15 @@ class UserCustomer(Base):
 
     user = relationship("User", back_populates="customer_associations")
     customer = relationship("Customer", back_populates="user_associations")
+
+class SkippedCustomer(Base):
+    __tablename__ = 'user_customer'
+
+    customer_id = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), primary_key=True)
+    is_in_queue = Column(Boolean, nullable=False)
+
+    customer = relationship("Customer", back_populates="skipped_associations")
+
 
 
 # class OTP(Base):
