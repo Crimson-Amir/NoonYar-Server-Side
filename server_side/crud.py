@@ -70,14 +70,15 @@ def new_bread_customers(db: Session, customer_id: int, bread_requirements: dict[
     db.add_all(objs)
 
 def update_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
-    customer = (
+    stmt = (
         update(models.Customer)
         .where(models.Customer.hardware_customer_id <= hardware_customer_id)
         .where(models.Customer.bakery_id == bakery_id)
         .values(is_in_queue=new_status)
+        .returning(models.Customer.id)
     )
 
-    result = db.execute(customer)
+    result = db.execute(stmt)
     return result
 
 def add_bakery(db: Session, bakery: schemas.AddBakery):
@@ -152,8 +153,8 @@ def edit_bread_names(db: Session, bread_type_and_new_name: dict):
     db.execute(stmt)
     db.commit()
 
-def add_new_skipped_customer(db: Session, customer_id, is_in_queu=True):
-    new_entry = models.SkippedCustomer(customer_id=customer_id, is_in_queu=is_in_queu)
+def add_new_skipped_customer(db: Session, customer_id, is_in_queue=True):
+    new_entry = models.SkippedCustomer(customer_id=customer_id, is_in_queue=is_in_queue)
     db.add(new_entry)
     db.commit()
     return new_entry
@@ -167,7 +168,7 @@ def get_today_skipped_customers(db: Session, bakery_id: int):
     stmt = (
         select(models.Customer)
         .join(models.Customer.skipped_associations)  # join via relationship
-        .where(models.SkippedCustomer.is_in_queue == True,
+        .where(models.SkippedCustomer.is_in_queue.is_(True),
                models.Customer.register_date >= midnight_utc,
                models.Customer.bakery_id == bakery_id)
     )

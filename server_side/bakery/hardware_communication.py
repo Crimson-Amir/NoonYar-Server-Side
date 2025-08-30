@@ -23,32 +23,31 @@ async def new_customer(
         customer: schemas.NewCustomerRequirement,
         token: str = Depends(validate_token)
 ):
-    if not token_helpers.verify_bakery_token(token, customer.bakery_id):
+    bakery_id = customer.bakery_id
+
+    if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid bakery token")
 
     r = request.app.state.redis
-    bakery_id = customer.bakery_id
 
-    breads_type, reservation_dict = await redis_helper.fetch_metadata_and_reservations(r, bakery_id)
-
+    breads_type, reservation_dict, skipped_ticket_keys = await redis_helper.fetch_metadata_and_reservations(r, bakery_id)
     if breads_type.keys() != customer.bread_requirements.keys():
         raise HTTPException(status_code=400, detail="Invalid bread types")
 
     if not reservation_dict:
         reservation_dict = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=breads_type)
-        if not reservation_dict:
-            raise HTTPException(status_code=404, detail={"error": "reservation not found in list"})
 
     customer_ticket_id = algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values())
 
     success = await redis_helper.add_customer_to_reservation_dict(
-        r, customer.bakery_id, customer_ticket_id, customer.bread_requirements
+        r, customer.bakery_id, customer_ticket_id, customer.bread_requirements, time_per_bread=breads_type
     )
 
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, customer.bread_requirements)
+
     return {'status': 'successful', 'customer_ticket_id': customer_ticket_id}
 
 
@@ -56,20 +55,27 @@ async def new_customer(
 @handle_errors
 async def next_ticket(
         request: Request,
-        ticket: schemas.NextTicketRequirement,
+        ticket: schemas.TickeOperationtRequirement,
         token: str = Depends(validate_token)
 ):
+    bakery_id = ticket.bakery_id
 
-    if not token_helpers.verify_bakery_token(token, ticket.bakery_id):
+    if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
     customer_id = ticket.customer_ticket_id
-    bakery_id = ticket.bakery_id
     r = request.app.state.redis
 
     current_ticket_id, time_per_bread, customer_reservation = await redis_helper.get_customer_ticket_data_pipe(r, bakery_id, customer_id)
-    await redis_helper.check_for_correct_current_id(r, bakery_id, customer_id, current_ticket_id)
-    current_user_detail = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
+
+    if not current_ticket_id:
+        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        current_ticket_id, time_per_bread, customer_reservation = await redis_helper.get_customer_ticket_data_pipe(r, bakery_id, customer_id)
+
+    current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
+    await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
+    time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
+    current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
     await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
 
     tasks.next_ticket_process.delay(customer_id, bakery_id)
@@ -79,37 +85,71 @@ async def next_ticket(
     }
 
 
-@router.put('/ct')
+@router.get('/ct/{bakery_id}')
 @handle_errors
 async def current_ticket(
         request: Request,
-        data: schemas.BakeryID,
+        bakery_id: int,
         token: str = Depends(validate_token)
 ):
-
-    if not token_helpers.verify_bakery_token(token, data.bakery_id):
+    if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    bakery_id = data.bakery_id
     r = request.app.state.redis
 
     current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
-    customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, current_ticket_id)
-    current_user_detail = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
+    if not current_ticket_id:
+        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
 
+    current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
+    customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, current_ticket_id)
+    time_per_bread, customer_reservations = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
+    current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservations)
     return {
         'status': 'successful', "current_ticket_id": current_ticket_id, "current_user_detail": current_user_detail
     }
 
 
-@router.put('/sc')
+@router.put('/st')
 @handle_errors
-async def scip_customer(
+async def skip_ticket(
         request: Request,
-        data: schemas.BakeryID,
+        ticket: schemas.TickeOperationtRequirement,
         token: str = Depends(validate_token)
 ):
-    pass
+    bakery_id = ticket.bakery_id
+
+
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    customer_id = ticket.customer_ticket_id
+    r = request.app.state.redis
+
+    status, customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
+    if not status:
+        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        status, customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
+        if not status: raise HTTPException(status_code=401, detail="empty queue or invalid customer id")
+
+    await redis_helper.add_customer_to_skipped_customers(r, bakery_id, customer_id, reservations_str=customer_reservation)
+    await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
+
+    next_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
+    next_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, next_ticket_id, return_error=False)
+    next_user_detail = {}
+    if next_ticket_id:
+        customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, next_ticket_id)
+        time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
+        next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
+
+    tasks.skip_customer.delay(customer_id, bakery_id)
+
+    return {
+        'status': 'successful', "next_ticket_id": next_ticket_id, "next_user_detail": next_user_detail
+    }
+
 
 @router.get('/hardware_init')
 @handle_errors

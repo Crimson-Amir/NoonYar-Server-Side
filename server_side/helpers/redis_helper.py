@@ -1,6 +1,8 @@
 from fastapi import HTTPException
 import crud, private
 from database import SessionLocal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 REDIS_KEY_PREFIX = "bakery:{0}"
 REDIS_KEY_RESERVATIONS = f"{REDIS_KEY_PREFIX}:reservations"
@@ -9,6 +11,13 @@ REDIS_KEY_TIME_PER_BREAD = f"{REDIS_KEY_PREFIX}:time_per_bread"
 REDIS_KEY_SKIPPED_CUSTOMER = f"{REDIS_KEY_PREFIX}:skipped_customer"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
+def seconds_until_midnight_iran():
+    tz = ZoneInfo("Asia/Tehran")
+    now = datetime.now(tz)
+    midnight = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return int((midnight - now).total_seconds())
 
 async def handle_time_per_bread(r, bakery_id):
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
@@ -20,18 +29,19 @@ async def handle_time_per_bread(r, bakery_id):
 async def fetch_metadata_and_reservations(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
+    skipped_ticket_key = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
 
     pipe1 = r.pipeline()
     pipe1.hgetall(time_key)
     pipe1.hgetall(res_key)
-    breads_type, reservation_dict = await pipe1.execute()
-    reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in
-                        reservation_dict.items()} if reservation_dict else {}
+    pipe1.hkeys(skipped_ticket_key)
+    breads_type, reservation_dict, skipped_ticket_keys = await pipe1.execute()
+    reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservation_dict.items()} if reservation_dict else {}
 
     if not breads_type:
         breads_type = await handle_time_per_bread(r, bakery_id)
 
-    return breads_type, reservation_dict
+    return breads_type, reservation_dict, skipped_ticket_keys
 
 async def get_order_set_from_reservations(r, bakery_id: int):
     reservations_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
@@ -45,11 +55,12 @@ async def get_order_set_from_reservations(r, bakery_id: int):
             mapping = {mid: int(mid) for mid in members}
             await r.zadd(order_key, mapping)
             first_id = min(mapping, key=mapping.get)
-            return first_id or []
+            return list(first_id) or []
 
 async def get_customer_reservation(r, bakery_id, customer_id):
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
     return await r.hget(res_key, customer_id)
+
 
 async def get_customer_ticket_data_pipe_without_reservations(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -66,14 +77,20 @@ async def get_customer_ticket_data_pipe(r, bakery_id, customer_id):
     pipe1 = r.pipeline()
     pipe1.zrange(order_key, 0, 0)
     pipe1.hgetall(time_key)
-    pipe1.hget(res_key, customer_id)
+    pipe1.hget(res_key, str(customer_id))
     return await pipe1.execute()
 
-async def check_for_correct_current_id(r, bakery_id, customer_id, current_ticket_id):
+async def check_current_ticket_id(r, bakery_id, current_ticket_id: list, return_error=True):
     if not current_ticket_id:
         current_ticket_id = await get_order_set_from_reservations(r, bakery_id)
         if not current_ticket_id:
-            raise HTTPException(status_code=404, detail={"error": "empty queue"})
+            if return_error:
+                raise HTTPException(status_code=404, detail={"error": "empty queue"})
+            else:
+                return
+    return int(current_ticket_id[0])
+
+async def check_for_correct_current_id(customer_id, current_ticket_id):
 
     if current_ticket_id != customer_id:
         raise HTTPException(
@@ -83,7 +100,6 @@ async def check_for_correct_current_id(r, bakery_id, customer_id, current_ticket
                 "current_ticket_id": current_ticket_id,
             }
         )
-    return current_ticket_id
 
 async def get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservations):
     if not time_per_bread:
@@ -91,23 +107,24 @@ async def get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread,
 
     if not customer_reservations:
         get_from_db = await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-        reservation_dict = ",".join(map(str, get_from_db.get(int(customer_id), [])))
-        if not reservation_dict:
-            raise HTTPException(status_code=404, detail={"error": "reservation not found in list"})
+        customer_reservations = get_from_db.get(customer_id)
+        if not customer_reservations: raise HTTPException(status_code=404, detail={"error": "reservation not found in list"})
+    else:
+        customer_reservations = list(map(int, customer_reservations.split(",")))
 
-    current_user_detail = await get_customer_reservation_detail(time_per_bread, customer_reservations)
-    return current_user_detail
+    return time_per_bread, customer_reservations
 
 async def remove_customer_id_from_reservation(r, bakery_id, customer_id):
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
-    pipe2 = r.pipeline()
-    pipe2.hdel(res_key, customer_id)
-    pipe2.zrem(order_key, customer_id)
-    return await pipe2.execute()
+    pipe = r.pipeline()
+    pipe.hget(res_key, str(customer_id))
+    pipe.hdel(res_key, customer_id)
+    pipe.zrem(order_key, customer_id)
+    reservations, r1, r2 = await pipe.execute()
+    return bool(r1 and r2), reservations
 
-async def get_customer_reservation_detail(time_per_bread, reservations) -> dict[str, int] | None:
-    counts = list(map(int, reservations.split(",")))
+async def get_customer_reservation_detail(time_per_bread, counts) -> dict[str, int] | None:
     bread_ids = list(time_per_bread.keys())
 
     if len(counts) != len(bread_ids):
@@ -133,9 +150,9 @@ LUA_ADD_RESERVATION = """
 
 
 async def add_customer_to_reservation_dict(
-        r, bakery_id: int, customer_id: int, bread_count_data: dict[str, int]
+        r, bakery_id: int, customer_id: int, bread_count_data: dict[str, int], time_per_bread=None
 ) -> bool:
-    time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
+    time_per_bread = time_per_bread or await get_bakery_time_per_bread(r, bakery_id)
     reservations_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
 
@@ -150,6 +167,11 @@ async def add_customer_to_reservation_dict(
 
     return result == 1
 
+async def add_customer_to_skipped_customers(r, bakery_id: int, customer_id: int, reservations: list[int]=None, reservations_str=None):
+
+    skipped_customer_key = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
+    return await r.hset(skipped_customer_key, str(customer_id), reservations_str or ",".join(map(str, reservations)))
+
 
 async def reset_bakery_metadata(r, bakery_id: int):
     """
@@ -157,66 +179,67 @@ async def reset_bakery_metadata(r, bakery_id: int):
     """
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
         if time_per_bread:
             await r.delete(time_key)
-            await r.hset(time_key, mapping=time_per_bread)
+            pipe = r.pipeline()
+            pipe.hset(time_key, mapping=time_per_bread)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(time_key, ttl)
+            pipe.execute()
         return time_per_bread
-    finally:
-        db.close()
 
 
 async def reset_bread_names(r):
-    """
-    Refresh bread metadata into Redis as HASHES (better than JSON).
-    """
-    db = SessionLocal()
-    try:
+    bread_name_key = REDIS_KEY_BREAD_NAMES
+
+    with SessionLocal() as db:
         breads = crud.get_breads(db)
         bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
         if bread_names:
-            await r.delete("bread_names")
-            await r.hset(f"bread_names", mapping=bread_names)
+            await r.delete(bread_name_key)
+            pipe = r.pipeline()
+            pipe.hset(bread_name_key, mapping=bread_names)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(bread_name_key, ttl)
+            pipe.execute()
         return bread_names
-    finally:
-        db.close()
-
 
 
 async def get_bakery_bread_names(r):
-    key = REDIS_KEY_BREAD_NAMES
-    raw = await r.hgetall(key)
+    bread_name_key = REDIS_KEY_BREAD_NAMES
+    raw = await r.hgetall(bread_name_key)
     if raw:
         return raw
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         breads = crud.get_breads(db)
-        bread_names = {str(bread.bread_type_id): bread.name for bread in breads}
+        bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
         if bread_names:
-            await r.hset(key, mapping=bread_names)
+            pipe = r.pipeline()
+            pipe.hset(bread_name_key, mapping=bread_names)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(bread_name_key, ttl)
+            await pipe.execute()
 
         return bread_names
-    finally:
-        db.close()
 
 
-async def get_bakery_skipped_customer(r, bakery_id):
+async def get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=True, bakery_time_per_bread=None):
     skipped_customer_key = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
-    reservations = await r.hgetall(skipped_customer_key)
-    if reservations:
-        return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()} if reservations else {}
+    if fetch_from_redis_first:
+        reservations = await r.hgetall(skipped_customer_key)
+        if reservations:
+            return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()}
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         today_customers = crud.get_today_skipped_customers(db, bakery_id)
-        time_per_bread = await get_bakery_time_per_bread(r, bakery_id)
+        time_per_bread = bakery_time_per_bread or await get_bakery_time_per_bread(r, bakery_id)
 
         reservation_dict = {}
         pipe = r.pipeline()
@@ -229,11 +252,12 @@ async def get_bakery_skipped_customer(r, bakery_id):
             pipe.hset(skipped_customer_key, str(customer.hardware_customer_id), ",".join(map(str, reservation)))
 
         if reservation_dict:
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(skipped_customer_key, ttl)
             await pipe.execute()
+            print("fetch skipped customer from db")
 
         return reservation_dict
-    finally:
-        db.close()
 
 
 async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True, bakery_time_per_bread=None):
@@ -242,14 +266,15 @@ async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True
     if fetch_from_redis_first:
         reservations = await r.hgetall(reservations_key)
         if reservations:
-            return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()} if reservations else {}
+            return {int(k): list(map(int, v.split(","))) for k, v in reservations.items()}
 
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-    db = SessionLocal()
-    try:
+
+    with SessionLocal() as db:
+
         today_customers = crud.get_today_customers(db, bakery_id)
         time_per_bread = bakery_time_per_bread or await get_bakery_time_per_bread(r, bakery_id)
-
+        print("1")
         reservation_dict = {}
         pipe = r.pipeline()
         pipe.delete(order_key)
@@ -263,11 +288,13 @@ async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True
             pipe.zadd(order_key, {str(customer.hardware_customer_id): customer.hardware_customer_id})
 
         if reservation_dict:
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(reservations_key, ttl)
+            pipe.expire(order_key, ttl)
             await pipe.execute()
+            print("fetch reservation from db")
 
         return reservation_dict
-    finally:
-        db.close()
 
 
 async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=True):
@@ -282,15 +309,24 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
         if raw:
             return {k: int(v) for k, v in raw.items()}
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
+
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
         if time_per_bread:
-            # Store in Redis hash
-            await r.hset(time_key, mapping=time_per_bread)
+            pipe = r.pipeline()
+            pipe.hset(time_key, mapping=time_per_bread)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(time_key, ttl)
+            await pipe.execute()
+            print("fetch time per bread from db")
 
         return time_per_bread
-    finally:
-        db.close()
+
+async def initialize_redis_sets(r, bakery_id: int):
+    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
+    reservations = await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+    skipped_list = await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+    bread_names = await get_bakery_bread_names(r)
+    return time_per_bread, reservations, skipped_list, bread_names

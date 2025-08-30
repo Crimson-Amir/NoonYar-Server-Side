@@ -1,4 +1,4 @@
-
+import functools
 import crud, requests
 from celery import Celery
 from database import SessionLocal
@@ -40,8 +40,34 @@ def report_to_admin_api(msg, message_thread_id=ERR_THREAD_ID):
         timeout=10
     )
 
-@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def register_new_customer(customer_ticket_id, bakery_id, bread_requirements):
+
+def handle_task_errors(func):
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+
+        except Exception as e:
+            retries = getattr(self.request, "retries", None)
+            max_retries = getattr(self, "max_retries", None)
+
+            log_and_report_error(
+                f"Celery task: {func.__name__}",
+                e,
+                extra={
+                    "_args": args,
+                    "_kwargs": kwargs,
+                    "retries": retries,
+                    "max_retries": max_retries,
+                }
+            )
+            raise
+    return wrapper
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirements):
     db = SessionLocal()
     try:
         c_id = crud.new_customer_no_commit(db, customer_ticket_id, bakery_id, True)
@@ -49,35 +75,43 @@ def register_new_customer(customer_ticket_id, bakery_id, bread_requirements):
         db.commit()
     except Exception as e:
         db.rollback()
-        log_and_report_error(
-            "Celery task: register_new_customer", e,
-            {"hardware_customer_id": customer_ticket_id,
-             "bakery_id": bakery_id, "bread_requirements": bread_requirements}
-        )
         raise e
     finally:
         db.close()
 
 
-@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def next_ticket_process(hardware_customer_id, bakery_id):
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def next_ticket_process(self, hardware_customer_id, bakery_id):
     db = SessionLocal()
     try:
         crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
         db.commit()
     except Exception as e:
-        db.rollback()
-        log_and_report_error(
-            "Celery task: next_ticket_process", e,
-            {"hardware_customer_id": hardware_customer_id, "bakery_id": bakery_id}
-        )
         raise e
     finally:
         db.close()
 
 
-@celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def send_otp(mobile_number, code, expire_m=10):
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def skip_customer(self, hardware_customer_id, bakery_id):
+    db = SessionLocal()
+    try:
+        customer = crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
+        customer_id = max(row[0] for row in customer)
+        crud.add_new_skipped_customer(db, customer_id, True)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def send_otp(self, mobile_number, code, expire_m=10):
     db = SessionLocal()
     try:
         url = f"https://api.sms.ir/v1/send/verify"
@@ -102,9 +136,6 @@ def send_otp(mobile_number, code, expire_m=10):
         raise Exception(f"Failed to send OTP: {response.status_code} - {response.text}")
     except Exception as e:
         db.rollback()
-        log_and_report_error(
-            "Celery task: send_otp", e, {"mobile_number": mobile_number}
-        )
         raise e
     finally:
         db.close()

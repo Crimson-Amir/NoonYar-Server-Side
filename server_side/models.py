@@ -103,10 +103,11 @@ class UserCustomer(Base):
     customer = relationship("Customer", back_populates="user_associations")
 
 class SkippedCustomer(Base):
-    __tablename__ = 'user_customer'
+    __tablename__ = 'skipped_customer'
 
     customer_id = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), primary_key=True)
     is_in_queue = Column(Boolean, nullable=False)
+    register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     customer = relationship("Customer", back_populates="skipped_associations")
 
