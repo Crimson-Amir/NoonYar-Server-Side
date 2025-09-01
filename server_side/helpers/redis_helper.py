@@ -332,11 +332,12 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
         return time_per_bread
 
 
-async def get_last_ticket_number(r, bakery_id):
+async def get_last_ticket_number(r, bakery_id, fetch_from_redis_first=True):
     last_one_key = REDIS_KEY_LAST_KEY.format(bakery_id)
-    last_ticket_number = await r.get(last_one_key)
-    if last_ticket_number:
-        return int(last_ticket_number)
+    if fetch_from_redis_first:
+        last_ticket_number = await r.get(last_one_key)
+        if last_ticket_number:
+            return int(last_ticket_number)
 
     with SessionLocal() as db:
         last_customer = crud.get_today_last_customer(db, bakery_id)
@@ -354,8 +355,7 @@ async def get_last_ticket_number(r, bakery_id):
         return last
 
 async def initialize_redis_sets(r, bakery_id: int):
-    await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
+    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
     await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
     await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-    await get_bakery_bread_names(r)
-    await get_last_ticket_number(r, bakery_id)
+    await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
