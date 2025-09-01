@@ -11,12 +11,25 @@ from admin import manage
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from mqtt_client import start_mqtt
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from helpers.token_helpers import TokenBlacklist, set_cookie
+import tasks
+from zoneinfo import ZoneInfo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = redis.from_url("redis://localhost:6379", decode_responses=True)
     start_mqtt()
+    tasks.initialize_bakeries_redis_sets.delay()
+
+    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Tehran"))
+    scheduler.add_job(
+        tasks.initialize_bakeries_redis_sets.delay,
+        CronTrigger(hour=0, minute=0, timezone=ZoneInfo("Asia/Tehran"))
+    )
+    scheduler.start()
+
     yield
     await app.state.redis.aclose()
 

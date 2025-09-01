@@ -21,6 +21,9 @@ def get_bakery(db: Session, bakery_id: int):
 def get_breads(db: Session):
     return db.query(models.BreadType).all()
 
+def get_all_bakeries(db: Session):
+    return db.query(models.Bakery).filter(models.Bakery.active == True).all()
+
 def get_today_customers(db: Session, bakery_id: int):
     tehran = pytz.timezone('Asia/Tehran')
     now_tehran = datetime.now(tehran)
@@ -174,6 +177,41 @@ def get_today_skipped_customers(db: Session, bakery_id: int):
     )
 
     return db.execute(stmt).scalars().all()
+
+def update_skipped_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
+    customer_subq = (
+        select(models.Customer.id)
+        .where(
+            models.Customer.hardware_customer_id == hardware_customer_id,
+            models.Customer.bakery_id == bakery_id
+        )
+    )
+
+    stmt = (
+        update(models.SkippedCustomer)
+        .where(models.SkippedCustomer.customer_id.in_(customer_subq))
+        .values(is_in_queue=new_status)
+    )
+
+    db.execute(stmt)
+
+def get_today_last_customer(db: Session, bakery_id: int):
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    last_customer = (
+        db.query(models.Customer)
+        .filter(
+            models.Customer.bakery_id == bakery_id,
+            models.Customer.register_date >= midnight_utc,
+        )
+        .order_by(models.Customer.id.desc())  # max ID first
+        .first()
+    )
+
+    return last_customer
 
 # def get_otp(db: Session, phone_number: str):
 #     otp_entry = db.query(models.OTP).filter(

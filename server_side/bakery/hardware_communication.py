@@ -17,7 +17,7 @@ def validate_token(authorization: str = Header(...)) -> str:
     return authorization[len("Bearer "):]
 
 @router.put('/nc')
-@handle_errors
+# @handle_errors
 async def new_customer(
         request: Request,
         customer: schemas.NewCustomerRequirement,
@@ -30,14 +30,14 @@ async def new_customer(
 
     r = request.app.state.redis
 
-    breads_type, reservation_dict, skipped_ticket_keys = await redis_helper.fetch_metadata_and_reservations(r, bakery_id)
+    breads_type, reservation_dict = await redis_helper.fetch_metadata_and_reservations(r, bakery_id)
     if breads_type.keys() != customer.bread_requirements.keys():
         raise HTTPException(status_code=400, detail="Invalid bread types")
 
     if not reservation_dict:
         reservation_dict = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=breads_type)
 
-    customer_ticket_id = algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values())
+    customer_ticket_id = await algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values(), r, bakery_id)
 
     success = await redis_helper.add_customer_to_reservation_dict(
         r, customer.bakery_id, customer_ticket_id, customer.bread_requirements, time_per_bread=breads_type
@@ -65,23 +65,30 @@ async def next_ticket(
 
     customer_id = ticket.customer_ticket_id
     r = request.app.state.redis
+    extera = {}
 
-    current_ticket_id, time_per_bread, customer_reservation = await redis_helper.get_customer_ticket_data_pipe(r, bakery_id, customer_id)
+    current_ticket_id, time_per_bread, customer_reservation, skipped_customer_reservations, remove_skipped_customer = await redis_helper.get_customer_ticket_data_and_remove_skipped_ticket_pipe(r, bakery_id, customer_id)
 
     if not current_ticket_id:
-        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
-        current_ticket_id, time_per_bread, customer_reservation = await redis_helper.get_customer_ticket_data_pipe(r, bakery_id, customer_id)
+        reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        if not reservation_list and not remove_skipped_customer: raise HTTPException(status_code=404, detail={"error": "empty queue"})
+        current_ticket_id, time_per_bread, customer_reservation, *_ = await redis_helper.get_customer_ticket_data_and_remove_skipped_ticket_pipe(r, bakery_id, customer_id)
 
-    current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
-    await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
+    if skipped_customer_reservations and remove_skipped_customer:
+        customer_reservation = skipped_customer_reservations
+        extera["skipped_customer"] = 1
+        tasks.skipped_ticket_proccess.delay(customer_id, bakery_id)
+    else:
+        current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
+        await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
+        await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
+        tasks.next_ticket_process.delay(customer_id, bakery_id)
+
     time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
-    await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
-
-    tasks.next_ticket_process.delay(customer_id, bakery_id)
 
     return {
-        'status': 'successful', "current_user_detail": current_user_detail
+        'status': 'successful', "current_user_detail": current_user_detail, **extera
     }
 
 
@@ -99,7 +106,8 @@ async def current_ticket(
 
     current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
     if not current_ticket_id:
-        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        if not reservation_list: raise HTTPException(status_code=404, detail={"error": "empty queue"})
         current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
 
     current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
@@ -129,7 +137,8 @@ async def skip_ticket(
 
     status, customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
     if not status:
-        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
+        if not reservation_list: raise HTTPException(status_code=404, detail={"error": "empty queue"})
         status, customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
         if not status: raise HTTPException(status_code=401, detail="empty queue or invalid customer id")
 

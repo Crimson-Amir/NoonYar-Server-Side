@@ -1,10 +1,11 @@
 import private
 from typing import List, Dict
+from helpers import redis_helper
 
 class Algorithm:
 
     @staticmethod
-    def new_reservation(reservation_dict: Dict[int, List[int]], bread_counts: List[int]):
+    async def new_reservation(reservation_dict: Dict[int, List[int]], bread_counts: List[int], r, bakery_id):
         """
         reservation_dict: {position: [bread_counts]}
         bread_counts: list of bread counts (any length)
@@ -13,7 +14,7 @@ class Algorithm:
         keys = sorted(reservation_dict.keys())
 
         if not keys:
-            return 1
+            return await redis_helper.get_last_ticket_number(r, bakery_id) + 1 or 1
 
         last_key = keys[-1]
         last_sum = sum(reservation_dict[last_key])

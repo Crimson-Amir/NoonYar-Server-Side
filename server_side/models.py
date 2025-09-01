@@ -39,6 +39,7 @@ class Bakery(Base):
     name = Column(String)
     location = Column(String)
     token = Column(String, nullable=False, default=generate_token)
+    active = Column(Boolean, default=True)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     bread_associations = relationship("BakeryBread", back_populates="bakery", cascade="all, delete-orphan")
@@ -110,6 +111,7 @@ class SkippedCustomer(Base):
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     customer = relationship("Customer", back_populates="skipped_associations")
+
 
 
 

@@ -4,10 +4,12 @@ from celery import Celery
 from database import SessionLocal
 from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
 from private import SMS_KEY
-import redis, traceback
+import traceback, redis
 from uuid import uuid4
 from logger_config import logger
-from helpers.token_helpers import OTPStore
+from helpers import token_helpers, redis_helper
+from redis import asyncio as aioredis
+import asyncio
 
 celery_app = Celery(
     "tasks",
@@ -88,6 +90,21 @@ def next_ticket_process(self, hardware_customer_id, bakery_id):
         crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
         db.commit()
     except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def skipped_ticket_proccess(self, hardware_customer_id, bakery_id):
+    db = SessionLocal()
+    try:
+        crud.update_skipped_customers_status(db, hardware_customer_id, bakery_id, False)
+        db.commit()
+    except Exception as e:
+        db.rollback()
         raise e
     finally:
         db.close()
@@ -127,8 +144,11 @@ def send_otp(self, mobile_number, code, expire_m=10):
         response = requests.post(url, json=data, headers=headers, timeout=10)
         if response.status_code == 200:
             r = redis.Redis(host="localhost", port=6379, decode_responses=True)
-            otp_store = OTPStore(r)
-            otp_store.set_otp(mobile_number, code, expire_m * 60)
+            try:
+                otp_store = token_helpers.OTPStore(r)
+                otp_store.set_otp(mobile_number, code, expire_m * 60)
+            finally:
+                r.close()
             response_json = response.json()
             return {"status": response_json['status'], "message": "OTP sent successfully",
                     "message_id": response_json["data"]["messageId"], "code": code}
@@ -139,3 +159,24 @@ def send_otp(self, mobile_number, code, expire_m=10):
         raise e
     finally:
         db.close()
+
+@celery_app.task(bind=True)
+def initialize_bakeries_redis_sets(self):
+    with SessionLocal() as session:
+        all_bakeries = crud.get_all_bakeries(session)
+        print(all_bakeries)
+        for bakery in all_bakeries:
+            initialize_bakery_redis_sets.delay(bakery.bakery_id)
+
+
+# TODO: make this fucntion standard
+@celery_app.task(bind=True)
+def initialize_bakery_redis_sets(self, bakery_id):
+    async def _task():
+        r = aioredis.from_url("redis://localhost:6379", decode_responses=True)
+        try:
+            await redis_helper.initialize_redis_sets(r, bakery_id)
+        finally:
+            await r.close()
+
+    asyncio.run(_task())
