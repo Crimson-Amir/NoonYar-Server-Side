@@ -17,7 +17,7 @@ def validate_token(authorization: str = Header(...)) -> str:
     return authorization[len("Bearer "):]
 
 @router.put('/nc')
-# @handle_errors
+@handle_errors
 async def new_customer(
         request: Request,
         customer: schemas.NewCustomerRequirement,

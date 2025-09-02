@@ -3,6 +3,7 @@ import crud
 import schemas
 from sqlalchemy.orm import Session
 from helpers import endpoint_helper, redis_helper
+import mqtt_client
 
 handle_errors = endpoint_helper.handle_endpoint_errors("bakery:management")
 
@@ -56,8 +57,6 @@ async def change_bread_names(
     await redis_helper.reset_bread_names(request.app.state.redis)
     return {'status': 'successfully updated'}
 
-
-
 @router.post('/bakery_bread')
 @handle_errors
 async def bakery_bread(
@@ -69,7 +68,8 @@ async def bakery_bread(
     crud.delete_all_corresponding_bakery_bread(db, data.bakery_id)
     crud.add_bakery_bread_entries(db, data.bakery_id, data.bread_type_id_and_cook_time)
     db.commit()
-    await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
+    new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
+    await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     return {'status': 'successfully updated'}
 
 
@@ -82,7 +82,8 @@ async def add_single_bread_to_bakery(
     _: int = Depends(require_admin)
 ):
     crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
-    await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
+    new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
+    await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     return {'status': 'successfully added'}
 
 
@@ -96,7 +97,8 @@ async def remove_single_bread_from_bakery(
     _: int = Depends(require_admin)
 ):
     remove_entry = crud.remove_single_bread_from_bakery(db, bakery_id, bread_id)
-    await redis_helper.reset_bakery_metadata(request.app.state.redis, bakery_id)
+    new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, bakery_id)
+    await mqtt_client.update_time_per_bread(request, bakery_id, new_config)
     if remove_entry:
         return {'status': 'Successfully deleted'}
     return {'status': 'No entry found'}

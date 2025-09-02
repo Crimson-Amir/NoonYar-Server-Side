@@ -2,15 +2,16 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, JSONResponse
-import jwt
+import jwt, asyncio
 from auth import create_access_token
-from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORITHM
+from asyncio_mqtt import Client
+from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORITHM, MQTT_BROKER_HOST, MQTT_BROKER_PORT
 from user import authentication, user
 from bakery import hardware_communication, management
 from admin import manage
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
-from mqtt_client import start_mqtt
+from mqtt_client import mqtt_handler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from helpers.token_helpers import TokenBlacklist, set_cookie
@@ -20,9 +21,12 @@ from zoneinfo import ZoneInfo
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = redis.from_url("redis://localhost:6379", decode_responses=True)
-    start_mqtt()
-    tasks.initialize_bakeries_redis_sets.delay()
 
+    app.state.mqtt_client = Client(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+    await app.state.mqtt_client.connect()
+    task = asyncio.create_task(mqtt_handler(app))
+
+    tasks.initialize_bakeries_redis_sets.delay()
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Tehran"))
     scheduler.add_job(
         tasks.initialize_bakeries_redis_sets.delay,
@@ -31,6 +35,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     yield
+    task.cancel()
+    await app.state.mqtt_client.disconnect()
     await app.state.redis.aclose()
 
 app = FastAPI(lifespan=lifespan)
