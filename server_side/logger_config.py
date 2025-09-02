@@ -1,11 +1,17 @@
-from pythonjsonlogger.json import JsonFormatter
-import logging
+import logging.handlers
+import queue
+from pythonjsonlogger.jsonlogger import JsonFormatter
 
+log_queue = queue.Queue(-1)  # infinite size
 
-logger = logging.getLogger("app")
+queue_handler = logging.handlers.QueueHandler(log_queue)
 
 file_handler = logging.FileHandler("app.log")
 formatter = JsonFormatter("%(asctime)s %(levelname)s %(message)s")
 file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
+
+listener = logging.handlers.QueueListener(log_queue, file_handler)
+
+logger = logging.getLogger("app")
+logger.addHandler(queue_handler)   # log events go into queue
 logger.setLevel(logging.INFO)

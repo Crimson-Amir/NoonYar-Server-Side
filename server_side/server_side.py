@@ -3,6 +3,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, JSONResponse
 import jwt, asyncio
+from logger_config import listener
 from auth import create_access_token
 from asyncio_mqtt import Client
 from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORITHM, MQTT_BROKER_HOST, MQTT_BROKER_PORT
@@ -21,7 +22,7 @@ from zoneinfo import ZoneInfo
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = redis.from_url("redis://localhost:6379", decode_responses=True)
-
+    listener.start()
     app.state.mqtt_client = Client(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
     await app.state.mqtt_client.connect()
     task = asyncio.create_task(mqtt_handler(app))
@@ -36,6 +37,7 @@ async def lifespan(app: FastAPI):
 
     yield
     task.cancel()
+    listener.stop()
     await app.state.mqtt_client.disconnect()
     await app.state.redis.aclose()
 

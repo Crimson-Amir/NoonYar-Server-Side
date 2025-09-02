@@ -33,6 +33,7 @@ def log_and_report_error(context: str, error: Exception, extra: dict = None):
     )
     report_to_admin_api.delay(err_msg)
 
+
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def report_to_admin_api(msg, message_thread_id=ERR_THREAD_ID):
     json_data = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}

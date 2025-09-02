@@ -2,9 +2,13 @@ from fastapi import APIRouter, HTTPException, Header, Request, Depends
 import crud, algorithm
 from helpers import token_helpers, redis_helper, endpoint_helper
 import schemas, tasks, algorithm
+from logger_config import logger
 from database import SessionLocal
 
-handle_errors = endpoint_helper.handle_endpoint_errors("bakery:hardware_communication")
+from server_side.user.authentication import create_user
+
+FILE_NAME = "bakery:hardware_communication"
+handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 
 router = APIRouter(
     prefix='/hc',
@@ -29,24 +33,25 @@ async def new_customer(
         raise HTTPException(status_code=401, detail="Invalid bakery token")
 
     r = request.app.state.redis
-
+    bread_requirements = customer.bread_requirements
     breads_type, reservation_dict = await redis_helper.fetch_metadata_and_reservations(r, bakery_id)
-    if breads_type.keys() != customer.bread_requirements.keys():
+    if breads_type.keys() != bread_requirements.keys():
         raise HTTPException(status_code=400, detail="Invalid bread types")
 
     if not reservation_dict:
         reservation_dict = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=breads_type)
 
-    customer_ticket_id = await algorithm.Algorithm.new_reservation(reservation_dict, customer.bread_requirements.values(), r, bakery_id)
+    customer_ticket_id = await algorithm.Algorithm.new_reservation(reservation_dict, bread_requirements.values(), r, bakery_id)
 
     success = await redis_helper.add_customer_to_reservation_dict(
-        r, customer.bakery_id, customer_ticket_id, customer.bread_requirements, time_per_bread=breads_type
+        r, customer.bakery_id, customer_ticket_id, bread_requirements, time_per_bread=breads_type
     )
 
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
-    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, customer.bread_requirements)
+    logger.info(f"{FILE_NAME}:new_cusomer", extera={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements})
+    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements)
 
     return {'status': 'successful', 'customer_ticket_id': customer_ticket_id}
 
@@ -86,6 +91,13 @@ async def next_ticket(
 
     time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
+
+    logger.info(f"{FILE_NAME}:next_ticket", extera={
+        "bakery_id": bakery_id,
+        "customer_id": customer_id,
+        "current_user_detail": current_user_detail,
+        "is_custome_skipped": extera.get("skipped_customer", 0)
+    })
 
     return {
         'status': 'successful', "current_user_detail": current_user_detail, **extera
@@ -154,7 +166,7 @@ async def skip_ticket(
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
     tasks.skip_customer.delay(customer_id, bakery_id)
-
+    logger.info(f"{FILE_NAME}:skip_ticket", extera={"bakery_id": bakery_id, "customer_id": customer_id})
     return {
         'status': 'successful', "next_ticket_id": next_ticket_id, "next_user_detail": next_user_detail
     }
