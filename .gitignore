@@ -4,3 +4,4 @@ __pycache__/
 alembic.ini
 app.log
 alembic/
+private.py
