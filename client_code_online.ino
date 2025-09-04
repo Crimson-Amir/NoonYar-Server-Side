@@ -5,390 +5,519 @@
 #include <LittleFS.h>
 #include <vector>
 #include <PubSubClient.h>
-#include <algorithm>
-#include <numeric>
+#include <LedControl.h>   // MAX7219
 
-#define MAX_KEYS 10
-#define MAX_WIFI_RETRIES 5
-#define MAX_HTTP_RETRIES 5
+// ---------- CONFIG ----------
+#define MAX_KEYS          10
+#define MAX_HTTP_RETRIES  5
 
+// MAX7219 pins (edit if needed)
+#define DIN_PIN  23
+#define CLK_PIN  18
+#define CS_PIN   5
+
+// WiFi / API / MQTT
+const char* ssid       = "Netenza_FDC1D0";
+const char* password   = "aA12345!";
+
+const char* bakery_id  = "1";
+const char* token      = "UQ0IYlmGWJbn-myt2sZtMKqgKSVBjGx18tGLxaB4aNs";
+
+const char* mqtt_server = "broker.emqx.io";
+const int   mqtt_port   = 1883;
+
+String topic_errors      = String("bakery/") + bakery_id + "/errors";
+String topic_bread_time  = String("bakery/") + bakery_id + "/bread_time_update";
+
+// ---------- GLOBAL STATE ----------
 Preferences prefs;
-
-const char* ssid = "Netenza_FDC1D0";
-const char* password = "aA12345!";
-
-const char* bakery_id = "1";
-const char* token = "UQ0IYlmGWJbn-myt2sZtMKqgKSVBjGx18tGLxaB4aNs";
+WiFiClient   net;
+PubSubClient mqtt(net);
+LedControl   lc(DIN_PIN, CLK_PIN, CS_PIN, 1);
 
 int breads_id[MAX_KEYS];
 int bread_cook_time[MAX_KEYS];
 int data_count = 0;
 
-bool init_success = false;
-std::vector<int> reservation_keys;
+volatile bool init_success = false;
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+// display state
+enum DeviceStatus : uint8_t {
+  STATUS_NORMAL,
+  STATUS_WIFI_ERROR,
+  STATUS_MQTT_ERROR,
+  STATUS_API_WAITING,
+  STATUS_API_ERROR
+};
 
-const char* mqtt_server = "broker.emqx.io";
-const int mqtt_port = 1883;
-String mqtt_client_id = "bakery-" + String(ESP.getChipModel()) + "-" + String(ESP.getChipId());
-String topic_errors = "bakery/" + bakery_id + "/errors";
-String bread_time_update = "bakery/" + String(bakery_id) + "/bread_time_update";
+volatile DeviceStatus currentStatus = STATUS_NORMAL;
+int num1 = 0;
+int num2 = 0;
+int num3 = 0;
+unsigned long lastBlinkMs = 0;
+bool blinkOn = true;
 
-// ========== UTILITIES ==========
+// busy mutex to prevent overlapping API jobs
+SemaphoreHandle_t busyMutex;
 
+// reconnect pacing
 unsigned long lastWifiAttempt = 0;
 unsigned long lastMqttAttempt = 0;
 
+
+// ====== BUSY HELPERS ======
+SemaphoreHandle_t busyMutex;
+
+bool networkBlock = false;
+
+void setNetworkBlock(bool enable) {
+  if (enable && !networkBlock) {
+    tryLockBusy();   // lock once
+    networkBlock = true;
+  } else if (!enable && networkBlock) {
+    unlockBusy();    // unlock once
+    networkBlock = false;
+  }
+}
+
+// Try to lock, return true if locked successfully
+bool tryLockBusy() {
+    return xSemaphoreTake(busyMutex, (TickType_t)0) == pdTRUE;
+}
+
+// Unlock
+void unlockBusy() {
+    xSemaphoreGive(busyMutex);
+}
+
+// Just check if busy (locked) without taking or modifying the semaphore
+bool isBusyNow() {
+    // Try take with zero timeout; if success, immediately give it back
+    if (xSemaphoreTake(busyMutex, (TickType_t)0) == pdTRUE) {
+        xSemaphoreGive(busyMutex);
+        return false; // was not busy
+    }
+    return true; // currently locked
+}
+// <----- HERE
+
+// ---------- UTILS: DISPLAY OVERLAY ----------
+
+void displayChar(char c) {
+  lc.clearDisplay(0);
+  lc.setChar(0, 0, c, false);
+}
+
+void displayDash() {
+  lc.clearDisplay(0);
+  lc.setChar(0, 0, '-', false);
+}
+
+void showNumbers(int a, int b, int c) {
+  if (currentStatus == STATUS_NORMAL) {
+    lc.clearDisplay(0);
+    lc.setDigit(0, 0, a % 10, false);  // rightmost
+    lc.setDigit(0, 1, b % 10, false);  // middle
+    lc.setDigit(0, 2, c % 10, false);  // leftmost
+  }
+}
+
+void setStatus(DeviceStatus st) {
+  currentStatus = st;
+  lc.clearDisplay(0);
+
+  if (st == STATUS_NORMAL) {
+    showNumbers(num1, num2, num3);
+  }
+  else if (st == STATUS_WIFI_ERROR) {
+    displayChar('W');
+  }
+  else if (st == STATUS_MQTT_ERROR) {
+    displayChar('M');
+  }
+  else if (st == STATUS_API_ERROR) {
+    displayChar('E');
+  }
+  else if (st == STATUS_API_WAITING) {
+    displayDash();
+  }
+}
+
+// ---------- FLASH (Preferences) ----------
+void saveInitDataToFlash() {
+  if (!prefs.begin("bakery_data", false)) return;
+  prefs.putInt("cnt", data_count);
+  char key[8];
+  for (int i = 0; i < data_count; i++) {
+    snprintf(key, sizeof(key), "k%d", i);
+    prefs.putInt(key, breads_id[i]);
+    snprintf(key, sizeof(key), "v%d", i);
+    prefs.putInt(key, bread_cook_time[i]);
+  }
+  prefs.end();
+}
+
+// ---------- CONNECTIVITY ----------
+bool isNetworkReady() {
+  return WiFi.status() == WL_CONNECTED && mqtt.connected();
+}
+
 void ensureConnectivity() {
+  // WiFi
   if (WiFi.status() != WL_CONNECTED) {
-    if (millis() - lastWifiAttempt > 5000) {
-      Serial.println("Trying WiFi...");
+    setStatus(STATUS_WIFI_ERROR);
+    setNetworkBlock(true);
+    if (millis() - lastWifiAttempt > 3500) {
+      lastWifiAttempt = millis();
       WiFi.disconnect();
       WiFi.begin(ssid, password);
-      lastWifiAttempt = millis();
     }
-    digitalWrite(LED_PIN, (millis() / 300) % 2);
-    return;
-  }
-
-  // MQTT connect
-  if (!client.connected()) {
-    if (millis() - lastMqttAttempt > 3000) {
-      Serial.println("Trying MQTT...");
-      if (client.connect(mqtt_client_id.c_str(), mqtt_user, mqtt_password)) {
-        Serial.println("MQTT connected.");
-        digitalWrite(LED_PIN, HIGH);
-        client.subscribe(bread_time_update.c_str());
-      } else {
-        Serial.printf("MQTT failed rc=%d\n", client.state());
+  } else {
+    if (!mqtt.connected()) {
+      if (millis() - lastMqttAttempt > 2500) {
+        lastMqttAttempt = millis();
+        if (mqtt.connect(bakery_id)) {
+          mqtt.subscribe(topic_bread_time.c_str());
+          setStatus(STATUS_NORMAL);
+        } else {
+          setNetworkBlock(true);
+          etStatus(STATUS_MQTT_ERROR);
+        }
       }
-      lastMqttAttempt = millis();
+    } else {
+      setNetworkBlock(false)
+      setStatus(STATUS_NORMAL);
+      mqtt.loop();
     }
-    digitalWrite(LED_PIN, (millis() / 800) % 2);
-    return;
   }
+}
 
-  client.loop();
+// ---------- MQTT ----------
+void mqttPublishError(const String& msg) {
+  if (mqtt.connected()) {
+    mqtt.publish(topic_errors.c_str(), msg.c_str(), true);
+  }
+}
+
+void fetchInitFromMqttTask(void* param) {
+    if (!tryLockBusy()) {
+        client.publish(topic_errors.c_str(), "❌ Device busy");
+        vTaskDelete(NULL);
+    }
+
+    bool ok = fetchInitData();
+    if (!ok){client.publish(topic_errors.c_str(), "failed");}
+    unlockBusy();
+    vTaskDelete(NULL);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String message;
-  for (unsigned int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-
-  String expected = "bakery/" + String(bakery_id) + "/bread_time_update";
-  if (String(topic) == expected) {
-    Serial.println("Bread time update received → refreshing init data");
-
-    xTaskCreatePinnedToCore(fetchInitTask, "fetchInitTask", 4096, NULL, 1, NULL, 1);
-  }
+    if (String(topic) == bread_time_update) {
+        xTaskCreatePinnedToCore(
+            fetchInitFromMqttTask, // simple function
+            "FetchInitOnMqtt", 4096, NULL, 1, NULL, 1
+        );
+    }
 }
 
-
-int vectorSum(const std::vector<int>& vec) {
-  return std::accumulate(vec.begin(), vec.end(), 0);
-}
-
-std::vector<int>* findReservationByKey(int key) {
-  for (auto& pair : reservation_dict) {
-    if (pair.first == key) return &pair.second;
-  }
-  return nullptr;
-}
-
-std::vector<int>* getReservationByKey(int key) {
-  for (auto& [k, v] : reservation_dict) {
-    if (k == key) return &v;
-  }
-  return nullptr;
-}
-
-// ========== RESERVATION LOGIC ==========
-
-String sendHttpRequest(const String& url, const String& method, const String& body = "") {
+// ---------- HTTP CORE ----------
+String sendHttpRequest(const String& url, const char* method, const String& body = "", uint16_t timeoutMs = 15000) {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected.");
-    return "";
+    return -1;
   }
 
   HTTPClient http;
   http.begin(url);
-  http.addHeader("Authorization", "Bearer " + String(token));
+  http.addHeader("Authorization", String("Bearer ") + token);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Connection", "keep-alive");
-  http.setTimeout(15000); // 15s
+  http.setTimeout(timeoutMs);
 
-  int httpCode = -1;
-  if (method == "GET") {
-    httpCode = http.GET();
-  } else if (method == "POST") {
-    httpCode = http.POST(body);
-  } else if (method == "PUT") {
-    httpCode = http.PUT(body);
-  }
+  int code = -1;
+  if      (!strcmp(method, "GET"))  code = http.GET();
+  else if (!strcmp(method, "POST")) code = http.POST(body);
+  else if (!strcmp(method, "PUT"))  code = http.PUT(body);
 
   String payload;
-  if (httpCode > 0) {
+  if (code > 0) {
     payload = http.getString();
-    Serial.printf("[%s] code=%d\n", url.c_str(), httpCode);
+    if (code != 200) {
+      mqttPublishError(String("http_request:") + url);
+      payload = -1;
+    }
   } else {
-    Serial.printf("[%s] request failed: %s\n", url.c_str(), http.errorToString(httpCode).c_str());
+    mqttPublishError(String("http_fail:") + http.errorToString(code));
   }
 
   http.end();
   return payload;
 }
 
-int NewCustomerServer(const std::vector<int>& breads) {
-  StaticJsonDocument<512> doc;
-  doc["bakery_id"] = atoi(bakery_id);
+// ---------- API CALLS ----------
+bool fetchInitData() {
+  if (WiFi.status() != WL_CONNECTED) return false;
 
-  JsonObject breadMap = doc.createNestedObject("bread_requirements");
-  for (int i = 0; i < data_count; ++i) {
-    breadMap[String(breads_id[i])] = breads[i];
-  }
+  String url = String("http://united-kingdom.oopsididitagain.site:8000/hc/hardware_init?bakery_id=") + bakery_id;
 
-  String body;
-  serializeJson(doc, body);
-
-  String resp = sendHttpRequest("http://united-kingdom.oopsididitagain.site:8000/hc/new_customer", "POST", body);
-  if (resp == "") return -1;
-
-  StaticJsonDocument<256> respDoc;
-  if (deserializeJson(respDoc, resp)) return -1;
-
-  return respDoc["customer_id"] | -1;
-}
-
-struct NextTicketResponse {
-  int current_ticket_id;
-  bool skipped_customer;
-  std::map<int,int> breads;
-  String error;
-};
-NextTicketResponse requestNextTicket(int customer_ticket_id) {
-  NextTicketResponse resp = {-1, false, {}, ""};
-
-  StaticJsonDocument<256> bodyDoc;
-  bodyDoc["bakery_id"] = atoi(bakery_id);
-  bodyDoc["customer_ticket_id"] = customer_ticket_id;
-
-  String body;
-  serializeJson(bodyDoc, body);
-
-  String response = sendHttpRequest("http://noonyar.ir/hc/nt", "PUT", body);
-  if (response == "") return resp;
-
-  StaticJsonDocument<512> doc;
-  if (deserializeJson(doc, response)) {
-    resp.error = "Invalid JSON";
-    return resp;
-  }
-
-  resp.current_ticket_id = doc["current_ticket_id"] | -1;
-  resp.skipped_customer = doc["skipped_customer"] | false;
-  for (JsonPair kv : doc["current_user_detail"].as<JsonObject>()) {
-    resp.breads[String(kv.key().c_str()).toInt()] = kv.value().as<int>();
-  }
-
-  return resp;
-}
-
-
-struct CurrentTicketResponse {
-  int current_ticket_id;
-  std::map<int,int> breads;
-  String error;
-};
-CurrentTicketResponse getCurrentTicket() {
-  CurrentTicketResponse resp = {-1, {}, ""};
-
-  String response = sendHttpRequest("http://noonyar.ir/hc/ct/" + String(bakery_id), "GET");
-  if (response == "") return resp;
-
-  StaticJsonDocument<512> doc;
-  if (deserializeJson(doc, response)) {
-    resp.error = "Invalid JSON";
-    return resp;
-  }
-
-  resp.current_ticket_id = doc["current_ticket_id"] | -1;
-  for (JsonPair kv : doc["current_user_detail"].as<JsonObject>()) {
-    resp.breads[String(kv.key().c_str()).toInt()] = kv.value().as<int>();
-  }
-
-  return resp;
-}
-
-bool skipTicket(int customer_ticket_id) {
-  StaticJsonDocument<256> bodyDoc;
-  bodyDoc["bakery_id"] = atoi(bakery_id);
-  bodyDoc["customer_ticket_id"] = customer_ticket_id;
-
-  String body;
-  serializeJson(bodyDoc, body);
-
-  String response = sendHttpRequest("http://noonyar.ir/hc/ct/st", "PUT", body);
-  return response != ""; // success if server replied anything
-}
-
-void newCustomerTask(void *param) {
-  std::vector<int>* breads = (std::vector<int>*)param;
-  int customerId = NewCustomerServer(*breads);
-
-  if (customerId != -1) {
-    Serial.printf("✅ New customer created, ID=%d\n", customerId);
-  } else {
-    client.publish(topic_errors.c_str(), "❌ NewCustomer failed");
-  }
-
-  delete breads; // free heap (since we passed a new'd vector)
-  vTaskDelete(NULL);
-}
-
-
-void requestNextTicketTask(void *param) {
-  int ticketId = *(int*)param;
-  NextTicketResponse r = requestNextTicket(ticketId);
-
-  if (r.current_ticket_id != -1) {
-    Serial.printf("✅ Next ticket: %d\n", r.current_ticket_id);
-  } else {
-    client.publish(topic_errors.c_str(), ("❌ NextTicket failed: " + r.error).c_str());
-  }
-
-  delete (int*)param; // free heap
-  vTaskDelete(NULL);
-}
-
-
-void currentTicketTask(void *param) {
-  CurrentTicketResponse r = getCurrentTicket();
-
-  if (r.current_ticket_id != -1) {
-    Serial.printf("✅ Current ticket: %d\n", r.current_ticket_id);
-  } else {
-    client.publish(topic_errors.c_str(), ("❌ CurrentTicket failed: " + r.error).c_str());
-  }
-
-  vTaskDelete(NULL);
-}
-
-
-void skipTicketTask(void *param) {
-  int ticketId = *(int*)param;
-  bool ok = skipTicket(ticketId);
-
-  if (ok) {
-    Serial.printf("✅ Ticket %d skipped\n", ticketId);
-  } else {
-    client.publish(topic_errors.c_str(), "❌ SkipTicket failed");
-  }
-
-  delete (int*)param; // free heap
-  vTaskDelete(NULL);
-}
-
-
-// ========== FLASH PREFS ==========
-
-
-void saveInitDataToFlash() {
-  if (!prefs.begin("bakery_data", false)) {
-    Serial.println("Prefs init failed!");
-    return;
-  }
-
-  prefs.putInt("cnt", data_count);
-  char key[8];
-  for (int i = 0; i < data_count; i++) {
-    snprintf(key, sizeof(key), "k%d", i);
-    prefs.putInt(key, breads_id[i]);
-
-    snprintf(key, sizeof(key), "v%d", i);
-    prefs.putInt(key, bread_cook_time[i]);
-  }
-
-  prefs.end();
-}
-
-
-// ========== NETWORK FETCH ==========
-
-void fetchInitData() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected. Reconnecting...");
-    connectToWiFi();
-  }
-  HTTPClient http;
-  String url = "http://united-kingdom.oopsididitagain.site:8000/hc/hardware_init?bakery_id=" + String(bakery_id);
-  http.begin(url);
-  http.addHeader("Connection", "keep-alive");
-  http.setTimeout(7000);
-
-  int tries = 0, httpCode = -1;
-  while (tries < MAX_HTTP_RETRIES && httpCode <= 0 && WiFi.status() == WL_CONNECTED) {
-    httpCode = http.GET();
-    if (httpCode <= 0) {
-      Serial.println("Retrying HTTP...");
-      delay(1000);
+  int tries = 0;
+  while (tries < MAX_HTTP_RETRIES) {
+    String resp = sendHttpRequest(url, "GET", "", 7000);
+    if (resp.length() == 0) {
       tries++;
+      vTaskDelay(800 / portTICK_PERIOD_MS);
+      continue;
     }
-  }
 
-  if (httpCode == 200) {
-    String payload = http.getString();
-
-    StaticJsonDocument<512> doc;
-
-    DeserializationError error = deserializeJson(doc, payload);
-    if (error) {
+    StaticJsonDocument<768> doc;
+    DeserializationError err = deserializeJson(doc, resp);
+    if (err) {
+      mqttPublishError(String("json_err:init:") + err.c_str());
       return false;
     }
 
     data_count = 0;
     for (JsonPair kv : doc.as<JsonObject>()) {
       if (data_count >= MAX_KEYS) break;
-      breads_id[data_count] = String(kv.key().c_str()).toInt();
+      breads_id[data_count]       = String(kv.key().c_str()).toInt();
       bread_cook_time[data_count] = kv.value().as<int>();
       data_count++;
     }
 
     saveInitDataToFlash();
+    return true;
   }
-  http.end();
-  return true
+
+  mqttPublishError("init_fetch_failed");
+  return false;
 }
 
-void fetchInitTask(void *param) {
-  while (!fetchInitData()) {
-    client.publish(topic_errors.c_str(), "fetchInitData:failed");
-    init_success = false;
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
+int apiNewCustomer(const std::vector<int>& breads) {
+  // Build body
+  StaticJsonDocument<512> bodyDoc;
+  bodyDoc["bakery_id"] = atoi(bakery_id);
+  JsonObject req = bodyDoc.createNestedObject("bread_requirements");
+  for (int i = 0; i < data_count; ++i) {
+    req[String(breads_id[i])] = (i < (int)breads.size() ? breads[i] : 0);
   }
-  init_success = true;
+  String body; serializeJson(bodyDoc, body);
+
+  String resp = sendHttpRequest("http://united-kingdom.oopsididitagain.site:8000/hc/new_customer", "POST", body);
+  if (resp.length() == 0) return -1;
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, resp);
+  if (err) { mqttPublishError(String("json_err:nc:") + err.c_str()); return -1; }
+
+  return doc["customer_id"] | -1;
+}
+
+struct NextTicketResponse {
+  int current_ticket_id = -1;
+  bool skipped_customer = false;
+  // map bread_id -> qty
+  std::map<int,int> breads;
+  String error;
+};
+
+NextTicketResponse apiNextTicket(int customer_ticket_id) {
+  NextTicketResponse r;
+
+  StaticJsonDocument<256> bodyDoc;
+  bodyDoc["bakery_id"] = atoi(bakery_id);
+  bodyDoc["customer_ticket_id"] = customer_ticket_id;
+  String body; serializeJson(bodyDoc, body);
+
+  String resp = sendHttpRequest("http://noonyar.ir/hc/nt", "PUT", body);
+  if (resp.length() == 0) { r.error = "http_fail"; return r; }
+
+  StaticJsonDocument<768> doc;
+  DeserializationError err = deserializeJson(doc, resp);
+  if (err) { r.error = String("json_err:") + err.c_str(); return r; }
+
+  r.current_ticket_id = doc["current_ticket_id"] | -1;
+  r.skipped_customer  = doc["skipped_customer"]  | false;
+
+  JsonObject detail = doc["current_user_detail"].as<JsonObject>();
+  for (JsonPair kv : detail) {
+    r.breads[String(kv.key().c_str()).toInt()] = kv.value().as<int>();
+  }
+
+  return r;
+}
+
+struct CurrentTicketResponse {
+  int current_ticket_id = -1;
+  std::map<int,int> breads;
+  String error;
+};
+
+CurrentTicketResponse apiCurrentTicket() {
+  CurrentTicketResponse r;
+
+  String resp = sendHttpRequest(String("http://noonyar.ir/hc/ct/") + bakery_id, "GET");
+  if (resp.length() == 0) { r.error = "http_fail"; return r; }
+
+  StaticJsonDocument<768> doc;
+  DeserializationError err = deserializeJson(doc, resp);
+  if (err) { r.error = String("json_err:") + err.c_str(); return r; }
+
+  r.current_ticket_id = doc["current_ticket_id"] | -1;
+  JsonObject detail = doc["current_user_detail"].as<JsonObject>();
+  for (JsonPair kv : detail) {
+    r.breads[String(kv.key().c_str()).toInt()] = kv.value().as<int>();
+  }
+  return r;
+}
+
+bool apiSkipTicket(int customer_ticket_id) {
+  StaticJsonDocument<256> bodyDoc;
+  bodyDoc["bakery_id"] = atoi(bakery_id);
+  bodyDoc["customer_ticket_id"] = customer_ticket_id;
+  String body; serializeJson(bodyDoc, body);
+
+  String resp = sendHttpRequest("http://noonyar.ir/hc/ct/st", "PUT", body);
+  return resp.length() != 0; // any 200 response == success
+}
+
+// ---------- TASKS (non-blocking jobs) ----------
+void newCustomerTask(void *param) {
+  std::vector<int>* breads = (std::vector<int>*)param;
+
+  if (xSemaphoreTake(busyMutex, (TickType_t)0) != pdTRUE) {
+    mqttPublishError("busy:new_customer");
+    delete breads;
+    vTaskDelete(NULL);
+  }
+
+  setStatus(STATUS_API_WAITING);
+  int cid = apiNewCustomer(*breads);
+  setStatus(cid != -1 ? STATUS_NORMAL : STATUS_API_ERROR);
+  if (cid == -1) mqttPublishError("nc:failed");
+
+  delete breads;
+  xSemaphoreGive(busyMutex);
   vTaskDelete(NULL);
 }
 
+void nextTicketTask(void *param) {
+  int ticketId = *(int*)param;
+  delete (int*)param;
 
-// ========== SETUP / LOOP ==========
+  if (xSemaphoreTake(busyMutex, (TickType_t)0) != pdTRUE) {
+    mqttPublishError("busy:next_ticket");
+    vTaskDelete(NULL);
+  }
 
+  setStatus(STATUS_API_WAITING);
+  NextTicketResponse r = apiNextTicket(ticketId);
+  bool ok = (r.current_ticket_id != -1);
+  setStatus(ok ? STATUS_NORMAL : STATUS_API_ERROR);
+  if (!ok) mqttPublishError(String("nt:failed:") + r.error);
+
+  xSemaphoreGive(busyMutex);
+  vTaskDelete(NULL);
+}
+
+void currentTicketTask(void *param) {
+  if (xSemaphoreTake(busyMutex, (TickType_t)0) != pdTRUE) {
+    mqttPublishError("busy:current_ticket");
+    vTaskDelete(NULL);
+  }
+
+  setStatus(STATUS_API_WAITING);
+  CurrentTicketResponse r = apiCurrentTicket();
+  bool ok = (r.current_ticket_id != -1);
+  setStatus(ok ? STATUS_NORMAL : STATUS_API_ERROR);
+  if (!ok) mqttPublishError(String("ct:failed:") + r.error);
+
+  xSemaphoreGive(busyMutex);
+  vTaskDelete(NULL);
+}
+
+void skipTicketTask(void *param) {
+  int ticketId = *(int*)param;
+  delete (int*)param;
+
+  if (xSemaphoreTake(busyMutex, (TickType_t)0) != pdTRUE) {
+    mqttPublishError("busy:skip_ticket");
+    vTaskDelete(NULL);
+  }
+
+  setStatus(STATUS_API_WAITING);
+  bool ok = apiSkipTicket(ticketId);
+  setStatus(ok ? STATUS_NORMAL : STATUS_API_ERROR);
+  if (!ok) mqttPublishError("st:failed");
+
+  xSemaphoreGive(busyMutex);
+  vTaskDelete(NULL);
+}
+
+// ---------- SETUP / LOOP ----------
 void setup() {
-  Serial.begin(115200);
+  // Filesystem (optional)
   LittleFS.begin();
 
-  xTaskCreatePinnedToCore(
-    fetchInitTask, "FetchInitTask", 4096, NULL, 1, NULL, 1
-  );
+  // MAX7219 init
+  lc.shutdown(0, false);
+  lc.setIntensity(0, 8); // 0..15
+  lc.clearDisplay(0);
 
-  client.setCallback(mqttCallback);
+  // Busy mutex
+  busyMutex = xSemaphoreCreateMutex();
 
+  // WiFi (non-blocking reconnection in loop)
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  // MQTT
+  mqtt.setServer(mqtt_server, mqtt_port);
+  mqtt.setCallback(mqttCallback);
+
+  // Load cached init data first (so device can work offline)
+  if (!loadInitDataFromFlash()) {
+    // if nothing cached yet, try to fetch async
+    xTaskCreatePinnedToCore(
+      [](void*){
+        if (xSemaphoreTake(busyMutex, (TickType_t)0) == pdTRUE) {
+          setStatus(STATUS_API_WAITING);
+          bool ok = fetchInitData();
+          setStatus(ok ? STATUS_NORMAL : STATUS_API_ERROR);
+          xSemaphoreGive(busyMutex);
+        } else {
+          mqttPublishError("busy:init_on_boot");
+        }
+        vTaskDelete(NULL);
+      }, "InitFetchBoot", 4096, NULL, 1, NULL, 1
+    );
+  } else {
+    setStatus(STATUS_NORMAL);
+  }
+
+  // show some default number until your app sets it
+  showNumber(0);
 }
 
 void loop() {
   ensureConnectivity();
+  updateDisplay();
 
+  // ... your normal app updates here ...
+  // Example: showNumber(currentTicket); when your app changes it.
+}
+
+// ---------- PUBLIC HELPERS YOU CAN CALL ----------
+void startNewCustomer(const std::vector<int>& breads) {
+  auto *heapVec = new std::vector<int>(breads);
+  xTaskCreatePinnedToCore(newCustomerTask, "NewCustomer", 4096, heapVec, 1, NULL, 1);
+}
+void startNextTicket(int ticketId) {
+  int* heapId = new int(ticketId);
+  xTaskCreatePinnedToCore(nextTicketTask, "NextTicket", 4096, heapId, 1, NULL, 1);
+}
+void startCurrentTicket() {
+  xTaskCreatePinnedToCore(currentTicketTask, "CurrentTicket", 4096, NULL, 1, NULL, 1);
+}
+void startSkipTicket(int ticketId) {
+  int* heapId = new int(ticketId);
+  xTaskCreatePinnedToCore(skipTicketTask, "SkipTicket", 4096, heapId, 1, NULL, 1);
 }
