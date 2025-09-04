@@ -39,29 +39,6 @@ async def add_bakery(bakery: schemas.AddBakery, db: Session = Depends(endpoint_h
     logger.info(f"{FILE_NAME}:add_bakery", extera={"name": bakery.name, "location": bakery.location})
     return bakery
 
-
-@router.post('/add_bread', response_model=schemas.BreadID)
-@handle_errors
-async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
-    bread_id = crud.add_bread(db, bread)
-    await redis_helper.reset_bread_names(request.app.state.redis)
-    logger.info(f"{FILE_NAME}:add_bread", extera={"name": bread.name})
-    return bread_id
-
-
-@router.put('/change_bread_names')
-@handle_errors
-async def change_bread_names(
-        request: Request,
-        data: schemas.ChangeBreadName,
-        db: Session = Depends(endpoint_helper.get_db),
-        _: int = Depends(require_admin)
-):
-    crud.edit_bread_names(db, data.bread_id_and_names)
-    await redis_helper.reset_bread_names(request.app.state.redis)
-    logger.info(f"{FILE_NAME}:change_bread_names", extera={"bread_id_and_names": data.bread_id_and_names})
-    return {'status': 'successfully updated'}
-
 @router.post('/bakery_bread')
 @handle_errors
 async def bakery_bread(
@@ -111,3 +88,26 @@ async def remove_single_bread_from_bakery(
         logger.info(f"{FILE_NAME}:remove_single_bread_from_bakery", extera={"bakery_id": bakery_id, "bread_id": bread_id})
         return {'status': 'Successfully deleted'}
     return {'status': 'No entry found'}
+
+
+@router.post('/add_bread', response_model=schemas.BreadID)
+@handle_errors
+async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
+    bread_id = crud.add_bread(db, bread)
+    await redis_helper.reset_bread_names(request.app.state.redis)
+    logger.info(f"{FILE_NAME}:add_bread", extera={"name": bread.name})
+    return bread_id
+
+
+@router.put('/change_bread_names')
+@handle_errors
+async def change_bread_names(
+        request: Request,
+        data: schemas.ChangeBreadName,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin)
+):
+    crud.edit_bread_names(db, data.bread_id_and_names)
+    await redis_helper.reset_bread_names(request.app.state.redis)
+    logger.info(f"{FILE_NAME}:change_bread_names", extera={"bread_id_and_names": data.bread_id_and_names})
+    return {'status': 'successfully updated'}

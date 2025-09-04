@@ -81,7 +81,7 @@ async def next_ticket(
 
     if skipped_customer_reservations and remove_skipped_customer:
         customer_reservation = skipped_customer_reservations
-        extera["skipped_customer"] = 1
+        extera["skipped_customer"] = True
         tasks.skipped_ticket_proccess.delay(customer_id, bakery_id)
     else:
         current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
@@ -96,7 +96,7 @@ async def next_ticket(
         "bakery_id": bakery_id,
         "customer_id": customer_id,
         "current_user_detail": current_user_detail,
-        "is_custome_skipped": extera.get("skipped_customer", 0)
+        "is_custome_skipped": extera.get("skipped_customer", False)
     })
 
     return {
@@ -174,14 +174,10 @@ async def skip_ticket(
 
 @router.get('/hardware_init')
 @handle_errors
-async def hardware_initialize(bakery_id: int):
+async def hardware_initialize(request: Request, bakery_id: int):
     db = SessionLocal()
     try:
-        all_bakery_bread = crud.get_bakery_breads(db, bakery_id)
-        bread_time = {}
-        for bakery_bread in all_bakery_bread:
-            bread_time[bakery_bread.bread_type_id] = bakery_bread.cook_time_s
-        return bread_time
+        return redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
     finally:
         db.close()
 

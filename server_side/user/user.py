@@ -57,7 +57,7 @@ async def queue_check(request: Request, b: int, r: int):
         bread_names.get(bid, bid): count for bid, count in zip(bread_ids, reservation_dict.get(reservation_number, []))} if is_user_exist else None
 
     return {
-        "is_user_exist": is_user_exist,
+        "is_user_exists": is_user_exist,
         "people_in_queue": people_in_queue,
         "empty_slot_time_avg": empty_slot_time,
         "in_queue_customers_time": in_queue_customers_time,
