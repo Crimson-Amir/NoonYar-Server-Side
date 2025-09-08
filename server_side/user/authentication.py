@@ -7,7 +7,7 @@ from database import SessionLocal
 from datetime import timedelta
 from logger_config import logger
 import random, time
-from helper import token_helpers, endpoint_helper
+from helpers import token_helpers, endpoint_helper
 
 FILE_NAME = "bakery:management"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
