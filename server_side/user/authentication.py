@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from auth import create_access_token, create_refresh_token, hash_password_md5, decode_token
 from database import SessionLocal
 from datetime import timedelta
-from ogger_config import logger
+from logger_config import logger
 import random, time
 from helper import token_helpers, endpoint_helper
 
