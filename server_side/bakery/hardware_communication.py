@@ -1,11 +1,8 @@
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
-import crud, algorithm
 from helpers import token_helpers, redis_helper, endpoint_helper
 import schemas, tasks, algorithm
 from logger_config import logger
 from database import SessionLocal
-
-from server_side.user.authentication import create_user
 
 FILE_NAME = "bakery:hardware_communication"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
