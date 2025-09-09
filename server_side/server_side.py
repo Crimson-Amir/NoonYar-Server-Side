@@ -21,7 +21,10 @@ from zoneinfo import ZoneInfo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.redis = redis.from_url("redis://localhost:6379", decode_responses=True)
+    app.state.redis = redis.from_url(
+        "redis://:amir1383amir@localhost:6379",
+        decode_responses=True
+    )
     listener.start()
     app.state.mqtt_client = Client(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
