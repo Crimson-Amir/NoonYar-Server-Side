@@ -23,7 +23,7 @@ def db_transaction(context: str):
                 log_and_report_error(f"{context}:{func.__name__}", e, extra={})
                 raise HTTPException(status_code=500, detail={
                     "detail": "Internal server error",
-                    "error_type": type(e),
+                    "error_type": type(e).__name__,
                     "error_reason": str(e)
                 })
         return wrapper
@@ -41,7 +41,7 @@ def handle_endpoint_errors(context: str):
                 log_and_report_error(f"{context}:{func.__name__}", e, extra={})
                 raise HTTPException(status_code=500, detail={
                     "detail": "Internal server error",
-                    "error_type": type(e),
+                    "error_type": type(e).__name__,
                     "error_reason": str(e)
                 })
         return wrapper
