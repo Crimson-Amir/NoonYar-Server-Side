@@ -36,7 +36,7 @@ async def verify_signup_otp(request: Request, response: Response, data: schemas.
     )
 
     token_helpers.set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
-    logger.info(f"{FILE_NAME}:verify-signup-otp", extera={"phone_number": data.phone_number, "code": data.code})
+    logger.info(f"{FILE_NAME}:verify-signup-otp", extra={"phone_number": data.phone_number, "code": data.code})
     return {"status": "OK"}
 
 @router.post('/sign-up/')
@@ -76,14 +76,14 @@ async def create_user(user: schemas.SignUpRequirement, request: Request, respons
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
 
-    extera = {"phone_number": user.phone_number, "first_name": user.first_name,
+    extra = {"phone_number": user.phone_number, "first_name": user.first_name,
               'last_name': user.last_name, 'password': user.password,
               "ip_address": client_ip, "user_agent": user_agent}
 
-    logger.info(f"{FILE_NAME}:create_user", extera=extera)
+    logger.info(f"{FILE_NAME}:create_user", extra=extra)
     msg = "👤 New User Registered!\n"
 
-    for key, value in extera.items():
+    for key, value in extra.items():
         msg += f"\n{key}: {value}"
 
     tasks.report_to_admin_api.delay(msg, message_thread_id=private.NEW_USER_THREAD_ID)
@@ -109,7 +109,7 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
         # raise HTTPException(status_code=400, detail='password is not correct')
 
     task = tasks.send_otp.delay(user.phone_number, code)
-    logger.info(f"{FILE_NAME}:enter_number", extera={"phone_number": user.phone_number})
+    logger.info(f"{FILE_NAME}:enter_number", extra={"phone_number": user.phone_number})
     return {'status': 'OK', 'message': 'OTP sent', 'next_step': next_step ,'task_id': task.id}
 
 @router.post('/verify-login')
@@ -135,7 +135,7 @@ async def verify_login(request: Request, response: Response, data: schemas.LogIn
 
     token_helpers.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
     token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
-    logger.info(f"{FILE_NAME}:verify_login", extera={"phone_number": data.phone_number, "code": data.code})
+    logger.info(f"{FILE_NAME}:verify_login", extra={"phone_number": data.phone_number, "code": data.code})
 
     return {'status': 'OK', 'user_id': db_user.user_id}
 

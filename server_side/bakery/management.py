@@ -36,7 +36,7 @@ def require_admin(
 @handle_errors
 async def add_bakery(bakery: schemas.AddBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bakery = crud.add_bakery(db, bakery)
-    logger.info(f"{FILE_NAME}:add_bakery", extera={"name": bakery.name, "location": bakery.location})
+    logger.info(f"{FILE_NAME}:add_bakery", extra={"name": bakery.name, "location": bakery.location})
     return bakery
 
 @router.post('/bakery_bread')
@@ -52,7 +52,7 @@ async def bakery_bread(
     db.commit()
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
-    logger.info(f"{FILE_NAME}:bakery_bread", extera={"bakery_id": data.bakery_id, "bread_type_id_and_cook_time": data.bread_type_id_and_cook_time})
+    logger.info(f"{FILE_NAME}:bakery_bread", extra={"bakery_id": data.bakery_id, "bread_type_id_and_cook_time": data.bread_type_id_and_cook_time})
     return {'status': 'successfully updated'}
 
 
@@ -67,7 +67,7 @@ async def add_single_bread_to_bakery(
     crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
-    logger.info(f"{FILE_NAME}:add_single_bread_to_bakery", extera={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
+    logger.info(f"{FILE_NAME}:add_single_bread_to_bakery", extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
 
     return {'status': 'successfully added'}
 
@@ -85,7 +85,7 @@ async def remove_single_bread_from_bakery(
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, bakery_id)
     if remove_entry:
         await mqtt_client.update_time_per_bread(request, bakery_id, new_config)
-        logger.info(f"{FILE_NAME}:remove_single_bread_from_bakery", extera={"bakery_id": bakery_id, "bread_id": bread_id})
+        logger.info(f"{FILE_NAME}:remove_single_bread_from_bakery", extra={"bakery_id": bakery_id, "bread_id": bread_id})
         return {'status': 'Successfully deleted'}
     return {'status': 'No entry found'}
 
@@ -95,7 +95,7 @@ async def remove_single_bread_from_bakery(
 async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bread_id = crud.add_bread(db, bread)
     await redis_helper.reset_bread_names(request.app.state.redis)
-    logger.info(f"{FILE_NAME}:add_bread", extera={"name": bread.name})
+    logger.info(f"{FILE_NAME}:add_bread", extra={"name": bread.name})
     return bread_id
 
 
@@ -109,5 +109,5 @@ async def change_bread_names(
 ):
     crud.edit_bread_names(db, data.bread_id_and_names)
     await redis_helper.reset_bread_names(request.app.state.redis)
-    logger.info(f"{FILE_NAME}:change_bread_names", extera={"bread_id_and_names": data.bread_id_and_names})
+    logger.info(f"{FILE_NAME}:change_bread_names", extra={"bread_id_and_names": data.bread_id_and_names})
     return {'status': 'successfully updated'}

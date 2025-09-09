@@ -47,7 +47,7 @@ async def new_customer(
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
-    logger.info(f"{FILE_NAME}:new_cusomer", extera={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements})
+    logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements)
 
     return {'status': 'successful', 'customer_ticket_id': customer_ticket_id}
@@ -67,7 +67,7 @@ async def next_ticket(
 
     customer_id = ticket.customer_ticket_id
     r = request.app.state.redis
-    extera = {}
+    extra = {}
 
     current_ticket_id, time_per_bread, customer_reservation, skipped_customer_reservations, remove_skipped_customer = await redis_helper.get_customer_ticket_data_and_remove_skipped_ticket_pipe(r, bakery_id, customer_id)
 
@@ -78,7 +78,7 @@ async def next_ticket(
 
     if skipped_customer_reservations and remove_skipped_customer:
         customer_reservation = skipped_customer_reservations
-        extera["skipped_customer"] = True
+        extra["skipped_customer"] = True
         tasks.skipped_ticket_proccess.delay(customer_id, bakery_id)
     else:
         current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
@@ -89,15 +89,15 @@ async def next_ticket(
     time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
-    logger.info(f"{FILE_NAME}:next_ticket", extera={
+    logger.info(f"{FILE_NAME}:next_ticket", extra={
         "bakery_id": bakery_id,
         "customer_id": customer_id,
         "current_user_detail": current_user_detail,
-        "is_custome_skipped": extera.get("skipped_customer", False)
+        "is_custome_skipped": extra.get("skipped_customer", False)
     })
 
     return {
-        'status': 'successful', "current_user_detail": current_user_detail, **extera
+        'status': 'successful', "current_user_detail": current_user_detail, **extra
     }
 
 
@@ -163,7 +163,7 @@ async def skip_ticket(
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
     tasks.skip_customer.delay(customer_id, bakery_id)
-    logger.info(f"{FILE_NAME}:skip_ticket", extera={"bakery_id": bakery_id, "customer_id": customer_id})
+    logger.info(f"{FILE_NAME}:skip_ticket", extra={"bakery_id": bakery_id, "customer_id": customer_id})
     return {
         'status': 'successful', "next_ticket_id": next_ticket_id, "next_user_detail": next_user_detail
     }
