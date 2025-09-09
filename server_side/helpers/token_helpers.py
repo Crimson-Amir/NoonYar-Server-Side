@@ -17,7 +17,8 @@ def get_token(bakery_id):
         db = SessionLocal()
         try:
             bakery = crud.get_bakery(db, bakery_id)
-            if not bakery: raise ValueError
+            if not bakery:
+                raise ValueError('No bakery found')
             bakery_token[bakery_id] = bakery.token
         finally:
             db.close()
