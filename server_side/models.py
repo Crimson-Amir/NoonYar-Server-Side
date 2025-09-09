@@ -36,8 +36,8 @@ class Bakery(Base):
     __tablename__ = 'bakery'
 
     bakery_id = Column(Integer, primary_key=True)
-    name = Column(String)
-    location = Column(String)
+    name = Unicode(255)
+    location = Unicode(255)
     token = Column(String, nullable=False, default=generate_token)
     active = Column(Boolean, default=True)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
