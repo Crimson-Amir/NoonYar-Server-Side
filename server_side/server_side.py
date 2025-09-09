@@ -24,8 +24,7 @@ async def lifespan(app: FastAPI):
     app.state.redis = redis.from_url("redis://localhost:6379", decode_responses=True)
     listener.start()
     app.state.mqtt_client = Client(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
-    await app.state.mqtt_client.connect()
-    task = asyncio.create_task(mqtt_handler(app))
+    app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
     tasks.initialize_bakeries_redis_sets.delay()
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Tehran"))
@@ -36,9 +35,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     yield
-    task.cancel()
+    app.state.mqtt_task.cancel()
     listener.stop()
-    await app.state.mqtt_client.disconnect()
     await app.state.redis.aclose()
 
 app = FastAPI(lifespan=lifespan)
