@@ -29,7 +29,7 @@ def set_cookie(response, key, value, max_age):
         key=key,
         value=value,
         httponly=True,
-        secure=True,
+        secure=False, # TODO: TRUE FOR HTTPS
         samesite="lax",
         max_age=max_age
     )
