@@ -14,9 +14,7 @@ class Algorithm:
         keys = sorted(reservation_dict.keys())
 
         if not keys:
-            last_key = await redis_helper.get_last_ticket_number(r, bakery_id) or 0
-            return last_key + 1
-
+            return await redis_helper.get_last_ticket_number(r, bakery_id)
         last_key = keys[-1]
         last_sum = sum(reservation_dict[last_key])
 
