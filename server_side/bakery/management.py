@@ -7,7 +7,7 @@ from helpers import endpoint_helper, redis_helper
 import mqtt_client
 
 FILE_NAME = "bakery:management"
-handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
+handle_errors = endpoint_helper.db_transaction(FILE_NAME)
 
 router = APIRouter(
     prefix='/manage',
