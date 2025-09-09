@@ -36,7 +36,7 @@ def require_admin(
 @handle_errors
 async def add_bakery(bakery: schemas.AddBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bakery = crud.add_bakery(db, bakery)
-    logger.info(f"{FILE_NAME}:add_bakery", extra={"name": bakery.name, "location": bakery.location})
+    logger.info(f"{FILE_NAME}:add_bakery", extra={"bakery_name": bakery.name, "location": bakery.location})
     return bakery
 
 @router.post('/bakery_bread')
