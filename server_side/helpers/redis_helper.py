@@ -342,9 +342,7 @@ async def get_last_ticket_number(r, bakery_id, fetch_from_redis_first=True):
     with SessionLocal() as db:
         last_customer = crud.get_today_last_customer(db, bakery_id)
 
-        last = None
-        if last_customer:
-            last = last_customer.hardware_customer_id
+        last = last_customer.hardware_customer_id if last_customer else 1
 
         pipe = r.pipeline()
         pipe.set(last_one_key, last)
