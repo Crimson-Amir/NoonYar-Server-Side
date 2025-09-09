@@ -21,10 +21,11 @@ def db_transaction(context: str):
             except Exception as e:
                 db.rollback()
                 log_and_report_error(f"{context}:{func.__name__}", e, extra={})
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error: {type(e).__name__}: {str(e)}"
-                )
+                raise HTTPException(status_code=500, detail={
+                    "detail": "Internal server error",
+                    "error_type": type(e),
+                    "error_reason": str(e)
+                })
         return wrapper
     return decorator
 
@@ -38,7 +39,11 @@ def handle_endpoint_errors(context: str):
                 raise e
             except Exception as e:
                 log_and_report_error(f"{context}:{func.__name__}", e, extra={})
-                raise HTTPException(status_code=500, detail="Internal server error")
+                raise HTTPException(status_code=500, detail={
+                    "detail": "Internal server error",
+                    "error_type": type(e),
+                    "error_reason": str(e)
+                })
         return wrapper
     return decorator
 
