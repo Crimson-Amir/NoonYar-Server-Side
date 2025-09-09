@@ -95,7 +95,7 @@ async def remove_single_bread_from_bakery(
 async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bread_id = crud.add_bread(db, bread)
     await redis_helper.reset_bread_names(request.app.state.redis)
-    logger.info(f"{FILE_NAME}:add_bread", extra={"name": bread.name})
+    logger.info(f"{FILE_NAME}:add_bread", extra={"read_name": bread.name})
     return bread_id
 
 
