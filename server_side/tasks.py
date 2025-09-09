@@ -144,7 +144,12 @@ def send_otp(self, mobile_number, code, expire_m=10):
         }
         response = requests.post(url, json=data, headers=headers, timeout=10)
         if response.status_code == 200:
-            r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+            r = redis.Redis(
+                host="localhost",
+                port=6379,
+                password="amir1383amir",  # ← add this
+                decode_responses=True
+            )
             try:
                 otp_store = token_helpers.OTPStore(r)
                 otp_store.set_otp(mobile_number, code, expire_m * 60)
