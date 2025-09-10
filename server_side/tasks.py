@@ -167,6 +167,7 @@ def send_otp(self, mobile_number, code, expire_m=10):
         db.close()
 
 @celery_app.task(bind=True)
+@handle_task_errors
 def initialize_bakeries_redis_sets(self):
     with SessionLocal() as session:
         all_bakeries = crud.get_all_bakeries(session)
@@ -177,6 +178,7 @@ def initialize_bakeries_redis_sets(self):
 
 # TODO: make this fucntion standard
 @celery_app.task(bind=True)
+@handle_task_errors
 def initialize_bakery_redis_sets(self, bakery_id):
     async def _task():
         r = redis.Redis(

@@ -46,4 +46,3 @@ def handle_endpoint_errors(context: str):
                 })
         return wrapper
     return decorator
-
