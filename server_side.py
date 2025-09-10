@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 import jwt, asyncio
 from logger_config import listener
 from auth import create_access_token
-from asyncio_mqtt import Client
+from aiomqtt import Client
 from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORITHM, MQTT_BROKER_HOST, MQTT_BROKER_PORT
 from user import authentication, user
 from bakery import hardware_communication, management
@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
         decode_responses=True
     )
     listener.start()
-    app.state.mqtt_client = Client(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+    app.state.mqtt_client = Client(hostname=MQTT_BROKER_HOST, port=MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
     tasks.initialize_bakeries_redis_sets.delay()
