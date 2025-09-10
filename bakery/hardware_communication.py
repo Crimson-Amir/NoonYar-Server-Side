@@ -174,7 +174,7 @@ async def skip_ticket(
 async def hardware_initialize(request: Request, bakery_id: int):
     db = SessionLocal()
     try:
-        return redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
+        return await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
     finally:
         db.close()
 
