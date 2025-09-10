@@ -40,7 +40,12 @@ def delete_all_corresponding_bakery_bread(db: Session, bakery_id: int):
 
 def create_user(db: Session, user: schemas.SignUpRequirement):
     hash_password = hash_password_md5(user.password)
-    db_user = models.User(first_name=user.first_name, phone_number=user.phone_number, hashed_password=hash_password)
+    db_user = models.User(
+        first_name=user.first_name,
+        last_name=user.last_name,
+        phone_number=user.phone_number,
+        hashed_password=hash_password
+    )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
