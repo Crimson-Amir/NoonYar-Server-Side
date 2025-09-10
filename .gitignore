@@ -5,3 +5,4 @@ alembic.ini
 app.log
 alembic/
 private.py
+venv/
