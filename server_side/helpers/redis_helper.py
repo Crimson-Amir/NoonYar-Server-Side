@@ -285,6 +285,7 @@ async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True
         reservation_dict = {}
         pipe = r.pipeline()
         pipe.delete(order_key)
+        pipe.delete(reservations_key)
 
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
