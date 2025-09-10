@@ -1,6 +1,7 @@
 import json
 import asyncio
 from asyncio_mqtt import Client, MqttError
+from tasks import report_to_admin_api
 
 MQTT_BAKERY_PREFIX = "bakery/{0}"
 MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
@@ -17,6 +18,7 @@ async def mqtt_handler(app):
                     topic = message.topic
                     payload = message.payload.decode()
                     print(f"[MQTT ERROR] {topic}: {payload}")
+                    report_to_admin_api(f"[MQTT ERROR] {topic}: {payload}")
 
     except MqttError as e:
         print(f"[MQTT ERROR] Connection lost: {e}")
