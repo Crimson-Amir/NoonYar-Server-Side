@@ -192,8 +192,8 @@ async def reset_bakery_metadata(r, bakery_id: int):
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
         if time_per_bread:
-            await r.delete(time_key)
             pipe = r.pipeline()
+            pipe.delete(time_key)
             pipe.hset(time_key, mapping=time_per_bread)
             ttl = seconds_until_midnight_iran()
             pipe.expire(time_key, ttl)
@@ -209,8 +209,8 @@ async def reset_bread_names(r):
         bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
         if bread_names:
-            await r.delete(bread_name_key)
             pipe = r.pipeline()
+            pipe.delete(bread_name_key)
             pipe.hset(bread_name_key, mapping=bread_names)
             ttl = seconds_until_midnight_iran()
             pipe.expire(bread_name_key, ttl)
@@ -230,6 +230,7 @@ async def get_bakery_bread_names(r):
 
         if bread_names:
             pipe = r.pipeline()
+            pipe.delete(bread_name_key)
             pipe.hset(bread_name_key, mapping=bread_names)
             ttl = seconds_until_midnight_iran()
             pipe.expire(bread_name_key, ttl)
@@ -251,6 +252,7 @@ async def get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=True,
 
         reservation_dict = {}
         pipe = r.pipeline()
+        pipe.delete(skipped_customer_key)
 
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
@@ -324,6 +326,7 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
 
         if time_per_bread:
             pipe = r.pipeline()
+            pipe.delete(time_key)
             pipe.hset(time_key, mapping=time_per_bread)
             ttl = seconds_until_midnight_iran()
             pipe.expire(time_key, ttl)
