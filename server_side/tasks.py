@@ -179,10 +179,15 @@ def initialize_bakeries_redis_sets(self):
 @celery_app.task(bind=True)
 def initialize_bakery_redis_sets(self, bakery_id):
     async def _task():
-        r = aioredis.from_url("redis://localhost:6379", decode_responses=True)
+        r = redis.Redis(
+            host="localhost",
+            port=6379,
+            password="amir1383amir",
+            decode_responses=True
+        )
         try:
             await redis_helper.initialize_redis_sets(r, bakery_id)
         finally:
-            await r.close()
+            r.close()
 
     asyncio.run(_task())

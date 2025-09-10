@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Tehran"))
     scheduler.add_job(
         tasks.initialize_bakeries_redis_sets.delay,
-        CronTrigger(hour=0, minute=0, timezone=ZoneInfo("Asia/Tehran"))
+        CronTrigger(hour=16, minute=0, timezone=ZoneInfo("Asia/Tehran"))
     )
     scheduler.start()
 
