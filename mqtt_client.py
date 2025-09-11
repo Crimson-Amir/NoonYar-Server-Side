@@ -19,7 +19,7 @@ async def mqtt_handler(app):
                 await client.subscribe("bakery/+/error")
                 print("[MQTT Handler] Subscribed. Waiting for messages...")
 
-                async for message in client.messages():  # <-- FIXED for aiomqtt
+                async for message in client.messages:  # <-- FIXED for aiomqtt
                     topic = message.topic
                     payload = message.payload.decode()
                     print(f"[MQTT ERROR RECEIVED] {topic}: {payload}")
