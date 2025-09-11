@@ -18,7 +18,7 @@ async def mqtt_handler(app):
                         topic = message.topic
                         payload = message.payload.decode()
                         print(f"[MQTT ERROR] {topic}: {payload}")
-                        report_to_admin_api(f"[MQTT ERROR] {topic}: {payload}")
+                        report_to_admin_api.delay(f"[MQTT ERROR] {topic}: {payload}")
 
         except MqttError as e:
             print(f"[MQTT ERROR] Connection lost: {e}")
