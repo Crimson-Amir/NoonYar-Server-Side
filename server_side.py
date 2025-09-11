@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
         decode_responses=True
     )
     listener.start()
-    app.state.mqtt_client = aiomqtt.Client()
+    app.state.mqtt_client = aiomqtt.Client(hostname=MQTT_BROKER_HOST, port=MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
     tasks.initialize_bakeries_redis_sets.delay()

@@ -9,22 +9,29 @@ MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
 
 
 async def mqtt_handler(app):
-    client: aiomqtt.Client = app.state.mqtt_client
+    client = app.state.mqtt_client
+    print(f"[MQTT Handler] Starting MQTT handler task...")
 
-    while True:
+    while True: # Keep trying to connect if disconnected
         try:
-            async with client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT):
-                async with client.messages() as messages:
-                    await client.subscribe("bakery/+/error")
+            print(f"[MQTT Handler] Attempting to connect to {client.hostname}:{client.port}...")
+            async with client:  # <-- this establishes the connection
+                print(f"[MQTT Handler] Connected to MQTT broker. Subscribing to '{MQTT_TOPIC}'...")
+                await client.subscribe("bakery/+/error")
+                print(f"[MQTT Handler] Subscribed. Waiting for messages...")
 
+                async with client.unfiltered_messages() as messages:
                     async for message in messages:
                         topic = message.topic
                         payload = message.payload.decode()
-                        print(f"[MQTT ERROR] {topic}: {payload}")
-                        report_to_admin_api(f"[MQTT ERROR] {topic}: {payload}")
+                        print(f"[MQTT ERROR RECEIVED] {topic}: {payload}") # Clearly indicate receipt
+                        # report_to_admin_api(f"[MQTT ERROR] {topic}: {payload}") # Re-enable when confident
 
-        except aiomqtt.MqttError as e:
-            print(f"[MQTT ERROR] Connection lost: {e}")
+        except MqttError as e:
+            print(f"[MQTT Handler] MqttError during connection/subscription: {e}. Retrying in 5 seconds...")
+            await asyncio.sleep(5)
+        except Exception as e: # Catch any other unexpected exceptions
+            print(f"[MQTT Handler] UNEXPECTED ERROR: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
 
 async def update_time_per_bread(request, bakery_id, new_config):
