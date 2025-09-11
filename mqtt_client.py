@@ -16,7 +16,7 @@ async def mqtt_handler(app):
                 async for message in client.messages:
                     topic = message.topic
                     payload = message.payload.decode()
-                    bakery_id = topic.split('/')[1]
+                    bakery_id = str(topic).split('/')[1]
                     text = (f"[🔴 MQTT ERROR]:"
                             f"\n\nBakeryID: {bakery_id}"
                             f"\nPayload: {payload}")
