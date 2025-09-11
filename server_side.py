@@ -38,9 +38,12 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     yield
-    app.state.mqtt_task.cancel()
     listener.stop()
     await app.state.redis.aclose()
+
+    app.state.mqtt_task.cancel()
+    try: await app.state.mqtt_task
+    except asyncio.CancelledError: pass
 
 app = FastAPI(lifespan=lifespan)
 
