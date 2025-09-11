@@ -14,7 +14,7 @@ async def mqtt_handler(app):
 
     while True: # Keep trying to connect if disconnected
         try:
-            print(f"[MQTT Handler] Attempting to connect to {client.hostname}:{client.port}...")
+            print(f"[MQTT Handler] Attempting to connect")
             async with client:  # <-- this establishes the connection
                 print(f"[MQTT Handler] Connected to MQTT broker. Subscribing to...")
                 await client.subscribe("bakery/+/error")
