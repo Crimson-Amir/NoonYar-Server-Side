@@ -11,9 +11,10 @@ async def mqtt_handler(app):
 
     while True:
         try:
-            async with client:  # connect
+            async with client:  # establishes connection
                 async with client.unfiltered_messages() as messages:
                     await client.subscribe("bakery/+/error")
+
                     async for message in messages:
                         topic = message.topic
                         payload = message.payload.decode()
@@ -22,10 +23,7 @@ async def mqtt_handler(app):
 
         except MqttError as e:
             print(f"[MQTT ERROR] Connection lost: {e}")
-            await asyncio.sleep(5)  # wait before retry
-        except asyncio.CancelledError:
-            print("MQTT handler cancelled")
-            break  # exit cleanly
+            await asyncio.sleep(5)
 
 
 async def update_time_per_bread(request, bakery_id, new_config):
