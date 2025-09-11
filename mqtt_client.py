@@ -9,24 +9,17 @@ MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
 
 async def mqtt_handler(app):
     client = app.state.mqtt_client
-    print("[MQTT Handler] Starting MQTT handler task...")
-
     while True:
         try:
-            print("[MQTT Handler] Attempting to connect")
             async with client:  # connect using hostname/port from init
-                print("[MQTT Handler] Connected to MQTT broker. Subscribing...")
                 await client.subscribe("bakery/+/error")
-                print("[MQTT Handler] Subscribed. Waiting for messages...")
 
-                async for message in client.messages:  # <-- FIXED for aiomqtt
+                async for message in client.messages:
                     topic = message.topic
                     payload = message.payload.decode()
-                    print(f"[MQTT ERROR RECEIVED] {topic}: {payload}")
-                    # report_to_admin_api(f"[MQTT ERROR] {topic}: {payload}")
+                    report_to_admin_api.delay(f"[MQTT ERROR] {topic}: {payload}")
 
         except Exception as e:
-            print(f"[MQTT Handler] UNEXPECTED ERROR: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
 
 async def update_time_per_bread(request, bakery_id, new_config):
