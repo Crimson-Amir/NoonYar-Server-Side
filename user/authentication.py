@@ -9,7 +9,7 @@ from logger_config import logger
 import random, time
 from helpers import token_helpers, endpoint_helper
 
-FILE_NAME = "bakery:management"
+FILE_NAME = "user:authentication.py"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 
 
@@ -110,7 +110,7 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
 
     task = tasks.send_otp.delay(user.phone_number, code)
     # TODO: REMOVE THIS IN PRODACTION
-    task.report_to_admin_api.delay(f"OTP CODE: {code}")
+    tasks.report_to_admin_api.delay(f"OTP CODE: {code}")
     logger.info(f"{FILE_NAME}:enter_number", extra={"phone_number": user.phone_number})
     return {'status': 'OK', 'message': 'OTP sent', 'next_step': next_step ,'task_id': task.id}
 
