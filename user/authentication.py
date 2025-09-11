@@ -109,6 +109,8 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
         # raise HTTPException(status_code=400, detail='password is not correct')
 
     task = tasks.send_otp.delay(user.phone_number, code)
+    # TODO: REMOVE THIS IN PRODACTION
+    task.report_to_admin_api.delay(f"OTP CODE: {code}")
     logger.info(f"{FILE_NAME}:enter_number", extra={"phone_number": user.phone_number})
     return {'status': 'OK', 'message': 'OTP sent', 'next_step': next_step ,'task_id': task.id}
 
