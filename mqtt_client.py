@@ -16,7 +16,7 @@ async def mqtt_handler(app):
         try:
             print(f"[MQTT Handler] Attempting to connect to {client.hostname}:{client.port}...")
             async with client:  # <-- this establishes the connection
-                print(f"[MQTT Handler] Connected to MQTT broker. Subscribing to '{MQTT_TOPIC}'...")
+                print(f"[MQTT Handler] Connected to MQTT broker. Subscribing to...")
                 await client.subscribe("bakery/+/error")
                 print(f"[MQTT Handler] Subscribed. Waiting for messages...")
 
@@ -27,9 +27,6 @@ async def mqtt_handler(app):
                         print(f"[MQTT ERROR RECEIVED] {topic}: {payload}") # Clearly indicate receipt
                         # report_to_admin_api(f"[MQTT ERROR] {topic}: {payload}") # Re-enable when confident
 
-        except MqttError as e:
-            print(f"[MQTT Handler] MqttError during connection/subscription: {e}. Retrying in 5 seconds...")
-            await asyncio.sleep(5)
         except Exception as e: # Catch any other unexpected exceptions
             print(f"[MQTT Handler] UNEXPECTED ERROR: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
