@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 import jwt, asyncio
 from logger_config import listener
 from auth import create_access_token
-from aiomqtt
+import aiomqtt
 from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORITHM, MQTT_BROKER_HOST, MQTT_BROKER_PORT
 from user import authentication, user
 from bakery import hardware_communication, management
