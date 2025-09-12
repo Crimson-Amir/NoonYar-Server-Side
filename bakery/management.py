@@ -69,6 +69,7 @@ async def update_bakery_single_bread(
         crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
         state = 'add'
     except IntegrityError:
+        db.rollback()
         crud.update_bread_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
         state = 'update'
 
