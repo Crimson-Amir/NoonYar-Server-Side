@@ -127,7 +127,7 @@ async def logout_successful():
 @router.post('/logout')
 @handle_errors
 async def logout(request: Request):
-    redirect = RedirectResponse('/logout-successful/', status_code=303)
+    redirect = RedirectResponse('/auth/logout-successful/', status_code=303)
     blacklist = token_helpers.TokenBlacklist(request.app.state.redis)
 
     # Access token
