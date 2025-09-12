@@ -57,9 +57,9 @@ async def bakery_bread(
     return {'status': 'successfully updated'}
 
 
-@router.put('/add_single_bread_to_bakery')
+@router.put('/update_bakery_single_bread')
 @handle_errors
-async def add_single_bread_to_bakery(
+async def update_bakery_single_bread(
     request: Request,
     data: schemas.ModifySingleBreadToBakery,
     db: Session = Depends(endpoint_helper.get_db),
