@@ -59,7 +59,8 @@ app.include_router(manage.router)
 @app.middleware("http")
 async def authenticate_request(request: Request, call_next):
 
-    exception_paths = ["/auth/sign-up", "/auth/enter-number", "/auth/verify-otp", "/hc", "/docs", "/auth/logout"]
+    exception_paths = ["/auth/logout-successful", "/auth/sign-up", "/auth/enter-number", "/auth/verify-otp",
+                       "/hc", "/docs", "/auth/logout"]
 
     if any(request.url.path.startswith(path) for path in exception_paths):
         return await call_next(request)
