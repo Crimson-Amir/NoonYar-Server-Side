@@ -132,6 +132,7 @@ def update_bread_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_tim
         .values(cook_time_s=cook_time_s)
     )
     result = db.execute(stmt)
+    db.commit()
     return result
 
 def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: int):
