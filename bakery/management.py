@@ -77,7 +77,7 @@ async def update_bakery_single_bread(
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     logger.info(f"{FILE_NAME}:add_single_bread_to_bakery", extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
 
-    return {'status': 'successfull', 'state': state}
+    return {'status': 'successful', 'state': state}
 
 
 @router.delete('/remove_single_bread_from_bakery/{bakery_id}/{bread_id}')

@@ -48,7 +48,7 @@ class ModifySingleBreadToBakery(BreadID, BakeryID):
 
 class NewAdminRequirement(BaseModel):
     user_id: int
-    status: bool = False
+    status: bool = True
 
 class NewAdminResult(BaseModel):
     admin_id: int
