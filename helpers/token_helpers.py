@@ -50,7 +50,7 @@ class OTPStore:
     def __init__(self, r):
         self.r = r
 
-    def set_otp(self, phone_number: str, otp: str, ttl: int = 300):
+    def set_otp(self, phone_number: str, otp: int, ttl: int = 300):
         hashed = hash_otp(otp)
         self.r.set(f"otp:{phone_number}", hashed, ex=ttl)
 

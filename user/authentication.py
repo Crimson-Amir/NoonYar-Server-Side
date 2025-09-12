@@ -39,8 +39,7 @@ async def create_user(user: schemas.SignUpRequirement, request: Request, respons
         raise HTTPException(status_code=400, detail=f"Invalid token")
 
     db_user = crud.get_user_by_phone_number(db, phone_number)
-    if db_user:
-        raise HTTPException(status_code=400, detail="this user already exists!")
+    if db_user: raise HTTPException(status_code=400, detail="this user already exists!")
 
     create_user_db = crud.create_user(db, user)
 
