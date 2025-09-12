@@ -124,6 +124,16 @@ def add_single_bread_to_bakery(db: Session, bakery_id:int, bread_type_id: int, c
     db.add(new_entry)
     db.commit()
 
+def update_bread_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
+    stmt = (
+        update(models.BakeryBread)
+        .where(models.BakeryBread.bread_type_id == bread_type_id)
+        .where(models.BakeryBread.bakery_id == bakery_id)
+        .values(cook_time_s=cook_time_s)
+    )
+    result = db.execute(stmt)
+    return result
+
 def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: int):
     bread_entry = (
         db.query(models.BakeryBread)

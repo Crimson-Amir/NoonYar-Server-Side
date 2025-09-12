@@ -5,6 +5,7 @@ import schemas
 from sqlalchemy.orm import Session
 from helpers import endpoint_helper, redis_helper
 import mqtt_client
+from sqlalchemy.exc import IntegrityError
 
 FILE_NAME = "bakery:management"
 handle_errors = endpoint_helper.db_transaction(FILE_NAME)
@@ -60,16 +61,22 @@ async def bakery_bread(
 @handle_errors
 async def add_single_bread_to_bakery(
     request: Request,
-    data: schemas.AddSingleBreadToBakery,
+    data: schemas.ModifySingleBreadToBakery,
     db: Session = Depends(endpoint_helper.get_db),
     _: int = Depends(require_admin)
 ):
-    crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+    try:
+        crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        state = 'add'
+    except IntegrityError:
+        crud.update_bread_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        state = 'update'
+
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     logger.info(f"{FILE_NAME}:add_single_bread_to_bakery", extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
 
-    return {'status': 'successfully added'}
+    return {'status': 'successfull', 'state': state}
 
 
 @router.delete('/remove_single_bread_from_bakery/{bakery_id}/{bread_id}')

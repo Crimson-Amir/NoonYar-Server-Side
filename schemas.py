@@ -43,7 +43,7 @@ class BreadID(BaseModel):
 class AddBread(BaseModel):
     name: str
 
-class AddSingleBreadToBakery(BreadID, BakeryID):
+class ModifySingleBreadToBakery(BreadID, BakeryID):
     cook_time_s: int
 
 class NewAdminRequirement(BaseModel):
