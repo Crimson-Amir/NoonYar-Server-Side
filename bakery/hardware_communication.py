@@ -116,7 +116,8 @@ async def current_ticket(
     current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
     if not current_ticket_id:
         reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
-        if not reservation_list: raise HTTPException(status_code=404, detail={"error": "empty queue"})
+        if not reservation_list:
+            return {'status': 'emptyQueue', "status_code": 3}
         current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
 
     current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
@@ -124,7 +125,10 @@ async def current_ticket(
     time_per_bread, customer_reservations = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservations)
     return {
-        'status': 'successful', "current_ticket_id": current_ticket_id, "current_user_detail": current_user_detail
+        'status': 'successful',
+        "status_code": 1,
+        "current_ticket_id": current_ticket_id,
+        "current_user_detail": current_user_detail
     }
 
 
