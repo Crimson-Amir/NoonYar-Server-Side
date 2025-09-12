@@ -118,7 +118,7 @@ async def verify_otp(request: Request, response: Response, data: schemas.VerifyO
     logger.info(f"{FILE_NAME}:verify_otp:{step}", extra={"phone_number": data.phone_number, "code": data.code})
     return {'status': 'OK', 'step': step}
 
-@router.post('/logout-successful')
+@router.get('/logout-successful')
 @handle_errors
 async def logout_successful():
     return {'status': 'logout successful'}
@@ -127,7 +127,7 @@ async def logout_successful():
 @router.post('/logout')
 @handle_errors
 async def logout(request: Request):
-    redirect = RedirectResponse('/auth/logout-successful/', status_code=303)
+    redirect = RedirectResponse('/auth/logout-successful', status_code=303)
     blacklist = token_helpers.TokenBlacklist(request.app.state.redis)
 
     # Access token
