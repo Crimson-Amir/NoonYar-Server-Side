@@ -6,7 +6,7 @@ import logging
 logging.getLogger("app")
 bakery_token = {}
 
-def hash_otp(code: str) -> str:
+def hash_otp(code: int) -> str:
     return hashlib.sha256(str(code).encode()).hexdigest()[:24]
 
 def get_expiry(minutes=10):
@@ -54,10 +54,9 @@ class OTPStore:
         hashed = hash_otp(otp)
         self.r.set(f"otp:{phone_number}", hashed, ex=ttl)
 
-    async def verify_otp(self, phone_number: str, otp: str) -> bool:
+    async def verify_otp(self, phone_number: str, otp: int) -> bool:
         key = f"otp:{phone_number}"
         hashed = await self.r.get(key)
-        print(hashed, hash_otp(otp))
         if not hashed:
             return False
         if hashed != hash_otp(otp):

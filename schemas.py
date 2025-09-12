@@ -14,7 +14,7 @@ class LogInRequirement(BaseModel):
     phone_number: str
     # password: str
 
-class LogInValue(BaseModel):
+class VerifyOTPRequirement(BaseModel):
     phone_number: str
     code: int
 

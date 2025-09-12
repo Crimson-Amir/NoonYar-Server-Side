@@ -23,22 +23,6 @@ def get_db():
     try: yield db
     finally: db.close()
 
-@router.post("/verify-signup-otp")
-@handle_errors
-async def verify_signup_otp(request: Request, response: Response, data: schemas.LogInValue):
-    otp_store = token_helpers.OTPStore(request.app.state.redis)
-    if not await otp_store.verify_otp(data.phone_number, data.code):
-        raise HTTPException(status_code=400, detail="OTP not found or incorrect")
-
-    token = create_access_token(
-        data={"phone_number": data.phone_number, "purpose": "signup"},
-        expires_delta=timedelta(minutes=private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
-    )
-
-    token_helpers.set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
-    logger.info(f"{FILE_NAME}:verify-signup-otp", extra={"phone_number": data.phone_number, "code": data.code})
-    return {"status": "OK"}
-
 @router.post('/sign-up/')
 @handle_errors
 async def create_user(user: schemas.SignUpRequirement, request: Request, response: Response, temporary_sign_up_token: str = Cookie(None), db: Session = Depends(get_db)):
@@ -97,26 +81,16 @@ def generate_otp():
 @router.post('/enter-number')
 @handle_errors
 async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get_db)):
-    db_user = crud.get_user_by_phone_number(db, user.phone_number)
     code = str(generate_otp())
-    next_step = "login"
-
-    if not db_user:
-        next_step = "sign-up"
-
-    # request_hashed_password = hash_password_md5(user.password)
-    # if request_hashed_password != db_user.hashed_password:
-        # raise HTTPException(status_code=400, detail='password is not correct')
-
     task = tasks.send_otp.delay(user.phone_number, code)
     # TODO: REMOVE THIS IN PRODACTION
     tasks.report_to_admin_api.delay(f"OTP CODE: {code}")
     logger.info(f"{FILE_NAME}:enter_number", extra={"phone_number": user.phone_number})
-    return {'status': 'OK', 'message': 'OTP sent', 'next_step': next_step ,'task_id': task.id}
+    return {'status': 'OK', 'message': 'OTP sent','task_id': task.id}
 
-@router.post('/verify-login')
+@router.post('/verify-otp')
 @handle_errors
-async def verify_login(request: Request, response: Response, data: schemas.LogInValue, db: Session = Depends(get_db)):
+async def verify_otp(request: Request, response: Response, data: schemas.VerifyOTPRequirement, db: Session = Depends(get_db)):
     otp_store = token_helpers.OTPStore(request.app.state.redis)
 
     if not await otp_store.verify_otp(data.phone_number, data.code):
@@ -125,21 +99,25 @@ async def verify_login(request: Request, response: Response, data: schemas.LogIn
     db_user = crud.get_user_by_phone_number(db, data.phone_number)
 
     if not db_user:
-        raise HTTPException(status_code=401, detail="User does not exists")
+        token = create_access_token(
+            data={"phone_number": data.phone_number, "purpose": "signup"},
+            expires_delta=timedelta(minutes=private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
+        )
+        token_helpers.set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
+        step = 'sign-up'
+    else:
+        user_data = {
+            "first_name": db_user.first_name,
+            "user_id": db_user.user_id
+        }
+        access_token = create_access_token(data=user_data)
+        cr_refresh_token = create_refresh_token(data=user_data)
+        token_helpers.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
+        token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
+        step = 'login'
 
-    user_data = {
-        "first_name": db_user.first_name,
-        "user_id": db_user.user_id
-    }
-
-    access_token = create_access_token(data=user_data)
-    cr_refresh_token = create_refresh_token(data=user_data)
-
-    token_helpers.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
-    token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
-    logger.info(f"{FILE_NAME}:verify_login", extra={"phone_number": data.phone_number, "code": data.code})
-
-    return {'status': 'OK', 'user_id': db_user.user_id}
+    logger.info(f"{FILE_NAME}:verify_otp:{step}", extra={"phone_number": data.phone_number, "code": data.code})
+    return {'status': 'OK', 'step': step}
 
 @router.post('/logout')
 @handle_errors
