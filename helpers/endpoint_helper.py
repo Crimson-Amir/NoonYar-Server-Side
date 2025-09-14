@@ -46,3 +46,6 @@ def handle_endpoint_errors(context: str):
                 })
         return wrapper
     return decorator
+
+def raise_empty_queue_exception():
+    raise HTTPException(status_code=404, detail={'status': 'emptyQueue', "status_code": 3})
