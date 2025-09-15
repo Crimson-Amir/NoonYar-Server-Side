@@ -362,7 +362,7 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
     await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
 
-async def is_ticket_in_skipped_list(r, customer_id):
-    skipped_list = REDIS_KEY_SKIPPED_CUSTOMER
+async def is_ticket_in_skipped_list(r, bakery_id, customer_id):
+    skipped_list = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
     is_exists = await r.hget(skipped_list, customer_id)
     return is_exists is not None
