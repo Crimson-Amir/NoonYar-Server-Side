@@ -177,6 +177,25 @@ async def skip_ticket(
     }
 
 
+@router.get('/is_ticket_in_skipped_list/{bakery_id}/{customer_id}')
+@handle_errors
+async def is_ticket_in_skipped_list(
+        request: Request,
+        bakery_id: int,
+        customer_id: int,
+        token: str = Depends(validate_token)
+):
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    _is_ticket_in_skipped_list = await redis_helper.is_ticket_in_skipped_list(r, customer_id)
+    return {
+        "is_ticket_in_skipped_list": _is_ticket_in_skipped_list
+    }
+
+
 @router.get('/hardware_init')
 @handle_errors
 async def hardware_initialize(request: Request, bakery_id: int):
