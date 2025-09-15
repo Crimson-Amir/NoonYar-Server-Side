@@ -189,8 +189,7 @@ async def is_ticket_in_skipped_list(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     r = request.app.state.redis
-
-    _is_ticket_in_skipped_list = await redis_helper.is_ticket_in_skipped_list(r, customer_id)
+    _is_ticket_in_skipped_list = await redis_helper.is_ticket_in_skipped_list(r, str(customer_id))
     return {
         "is_ticket_in_skipped_list": _is_ticket_in_skipped_list
     }
