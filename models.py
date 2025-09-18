@@ -3,6 +3,7 @@ from celery.worker.strategy import default
 from sqlalchemy.types import Unicode
 from database import Base
 from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger
+from sqlalchemy import ForeignKeyConstraint
 from datetime import datetime
 from pytz import UTC
 from sqlalchemy.orm import relationship
@@ -68,6 +69,21 @@ class BakeryBread(Base):
     bread = relationship("BreadType", back_populates="bakery_associations")
 
 
+class BakeryBreadNotify(Base):
+    __tablename__ = 'bakery_bread_notify'
+
+    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), primary_key=True)
+    bread_type_id = Column(Integer, ForeignKey('bread_type.bread_id', ondelete='CASCADE'), primary_key=True)
+    register_date = Column(DateTime, default=lambda: datetime.now(UTC))
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['bakery_id', 'bread_type_id'],
+            ['bakery_bread.bakery_id', 'bakery_bread.bread_type_id'],
+            ondelete='CASCADE'
+        ),
+    )
+
+
 class Customer(Base):
     __tablename__ = 'customer'
 
@@ -111,8 +127,6 @@ class SkippedCustomer(Base):
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     customer = relationship("Customer", back_populates="skipped_associations")
-
-
 
 
 # class OTP(Base):

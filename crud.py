@@ -151,6 +151,45 @@ def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: 
         return False
 
 
+def add_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
+    # Ensure the bakery-bread pair exists to avoid integrity errors
+    exists = (
+        db.query(models.BakeryBread)
+        .filter(
+            models.BakeryBread.bakery_id == bakery_id,
+            models.BakeryBread.bread_type_id == bread_type_id
+        ).first()
+    )
+    if not exists:
+        raise ValueError("BakeryBread entry does not exist for given bakery_id and bread_type_id")
+
+    entry = models.BakeryBreadNotify(bakery_id=bakery_id, bread_type_id=bread_type_id)
+    db.add(entry)
+    db.commit()
+    return entry
+
+def remove_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
+    entry = (
+        db.query(models.BakeryBreadNotify)
+        .filter(
+            models.BakeryBreadNotify.bakery_id == bakery_id,
+            models.BakeryBreadNotify.bread_type_id == bread_type_id
+        ).first()
+    )
+    if entry:
+        db.delete(entry)
+        db.commit()
+        return True
+    return False
+
+def get_bakery_bread_notifies(db: Session, bakery_id: int):
+    return (
+        db.query(models.BakeryBreadNotify)
+        .filter(models.BakeryBreadNotify.bakery_id == bakery_id)
+        .all()
+    )
+
+
 def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
     new_admin = models.Admin(user_id=admin.user_id, active=admin.status)
     db.add(new_admin)

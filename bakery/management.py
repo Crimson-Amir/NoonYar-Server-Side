@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from helpers import endpoint_helper, redis_helper
 import mqtt_client
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError
 
 FILE_NAME = "bakery:management"
 handle_errors = endpoint_helper.db_transaction(FILE_NAME)
@@ -119,3 +120,39 @@ async def change_bread_names(
     await redis_helper.reset_bread_names(request.app.state.redis)
     logger.info(f"{FILE_NAME}:change_bread_names", extra={"bread_id_and_names": data.bread_id_and_names})
     return {'status': 'successfully updated'}
+
+
+@router.post('/notify/add')
+@handle_errors
+async def add_notify_bakery_bread(
+        data: schemas.ModifyBakeryBreadNotify,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin)
+):
+    entry = crud.add_bakery_bread_notify(db, data.bakery_id, data.bread_id)
+    logger.info(f"{FILE_NAME}:add_notify_bakery_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
+    return {'status': 'successfully updated'}
+
+
+@router.delete('/notify/remove/{bakery_id}/{bread_id}')
+@handle_errors
+async def remove_notify_bakery_bread(
+        bakery_id: int,
+        bread_id: int,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin)
+):
+    removed = crud.remove_bakery_bread_notify(db, bakery_id, bread_id)
+    logger.info(f"{FILE_NAME}:remove_notify_bakery_bread", extra={"bakery_id": bakery_id, "bread_id": bread_id, "removed": removed})
+    return {"status": "removed" if removed else "not_found"}
+
+
+@router.get('/notify/list/{bakery_id}')
+@handle_errors
+async def list_notify_bakery_bread(
+        bakery_id: int,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin)
+):
+    entries = crud.get_bakery_bread_notifies(db, bakery_id)
+    return {'entries': [{"bakery_id": e.bakery_id, "bread_id": e.bread_type_id} for e in entries]}
