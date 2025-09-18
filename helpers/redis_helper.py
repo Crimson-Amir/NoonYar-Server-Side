@@ -452,5 +452,9 @@ async def get_upcoming_notify_bread_counts(r, bakery_id: int, num_tickets: int) 
             bread_id_int = int(bread_id_str)
             if bread_id_int in notify_set and count:
                 totals[bread_id_str] = totals.get(bread_id_str, 0) + count
+    
+    for bread_id in notify_set:
+        key = str(bread_id)
+        totals.setdefault(key, 0)
 
     return totals
