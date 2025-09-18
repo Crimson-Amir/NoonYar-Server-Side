@@ -58,3 +58,6 @@ class NewAdminResult(BaseModel):
 
 class ChangeBreadName(BaseModel):
     bread_id_and_names: Dict[int, str]
+
+class ModifyBakeryBreadNotify(BakeryID, BreadID):
+    pass
