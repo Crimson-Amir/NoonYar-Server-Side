@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from helpers import endpoint_helper, redis_helper
 import mqtt_client
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.exc import SQLAlchemyError
 
 FILE_NAME = "bakery:management"
 handle_errors = endpoint_helper.db_transaction(FILE_NAME)
@@ -129,10 +128,16 @@ async def add_notify_bakery_bread(
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin)
 ):
-    entry = crud.add_bakery_bread_notify(db, data.bakery_id, data.bread_id)
-    logger.info(f"{FILE_NAME}:add_notify_bakery_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
-    return {'status': 'successfully updated'}
-
+    try:
+        entry = crud.add_bakery_bread_notify(db, data.bakery_id, data.bread_id)
+        logger.info(f"{FILE_NAME}:add_notify_bakery_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail='Bread-notify already exists')
+    except database_helper.BreadDoesNotExist as e:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(e))
+    return {'status': 'successfully added'}
 
 @router.delete('/notify/remove/{bakery_id}/{bread_id}')
 @handle_errors
@@ -155,4 +160,4 @@ async def list_notify_bakery_bread(
         _: int = Depends(require_admin)
 ):
     entries = crud.get_bakery_bread_notifies(db, bakery_id)
-    return {'entries': [{"bakery_id": e.bakery_id, "bread_id": e.bread_type_id} for e in entries]}
+    return {'bread_ids': [e.bread_type_id for e in entries]}

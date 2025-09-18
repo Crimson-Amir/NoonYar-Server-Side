@@ -5,6 +5,7 @@ from auth import hash_password_md5
 import pytz
 from sqlalchemy import asc
 from datetime import datetime, time
+from helpers import database_helper
 
 def get_user_by_phone_number(db: Session, phone_number: str):
     return db.query(models.User).filter(models.User.phone_number == phone_number).first()
@@ -161,7 +162,7 @@ def add_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
         ).first()
     )
     if not exists:
-        raise ValueError("BakeryBread entry does not exist for given bakery_id and bread_type_id")
+        raise database_helper.BreadDoesNotExist()
 
     entry = models.BakeryBreadNotify(bakery_id=bakery_id, bread_type_id=bread_type_id)
     db.add(entry)
