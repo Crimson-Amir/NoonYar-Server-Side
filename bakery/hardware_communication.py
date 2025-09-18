@@ -199,9 +199,12 @@ async def is_ticket_in_skipped_list(
 @handle_errors
 async def upcoming_notify_counts(
         data: schemas.UpcomingNotifyRequest,
-        db: Session = Depends(endpoint_helper.get_db),
-        _: int = Depends(require_admin)
+        request: Request,
+        token: str = Depends(validate_token)
 ):
+    if not token_helpers.verify_bakery_token(token, data.bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
     r = request.app.state.redis
     counts = await redis_helper.get_upcoming_notify_bread_counts(r, data.bakery_id, data.num_tickets)
     return counts
