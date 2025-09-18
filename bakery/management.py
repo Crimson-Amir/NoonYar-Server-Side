@@ -124,6 +124,7 @@ async def change_bread_names(
 @router.post('/notify/add')
 @handle_errors
 async def add_notify_bakery_bread(
+        request: Request,
         data: schemas.ModifyBakeryBreadNotify,
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin)
@@ -144,6 +145,7 @@ async def add_notify_bakery_bread(
 @router.delete('/notify/remove/{bakery_id}/{bread_id}')
 @handle_errors
 async def remove_notify_bakery_bread(
+        request: Request,
         bakery_id: int,
         bread_id: int,
         db: Session = Depends(endpoint_helper.get_db),
@@ -160,6 +162,7 @@ async def remove_notify_bakery_bread(
 @router.get('/notify/list/{bakery_id}')
 @handle_errors
 async def list_notify_bakery_bread(
+        request: Request,
         bakery_id: int,
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin)
