@@ -195,6 +195,18 @@ async def is_ticket_in_skipped_list(
     }
 
 
+@router.post('/upcoming')
+@handle_errors
+async def upcoming_notify_counts(
+        data: schemas.UpcomingNotifyRequest,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin)
+):
+    r = request.app.state.redis
+    counts = await redis_helper.get_upcoming_notify_bread_counts(r, data.bakery_id, data.num_tickets)
+    return counts
+
+
 @router.get('/hardware_init')
 @handle_errors
 async def hardware_initialize(request: Request, bakery_id: int):

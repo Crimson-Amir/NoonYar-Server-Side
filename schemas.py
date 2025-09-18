@@ -61,3 +61,6 @@ class ChangeBreadName(BaseModel):
 
 class ModifyBakeryBreadNotify(BakeryID, BreadID):
     pass
+
+class UpcomingNotifyRequest(BakeryID):
+    num_tickets: int
