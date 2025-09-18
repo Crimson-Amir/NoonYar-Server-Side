@@ -10,6 +10,7 @@ REDIS_KEY_RESERVATION_ORDER = f"{REDIS_KEY_PREFIX}:reservation_order"
 REDIS_KEY_TIME_PER_BREAD = f"{REDIS_KEY_PREFIX}:time_per_bread"
 REDIS_KEY_SKIPPED_CUSTOMER = f"{REDIS_KEY_PREFIX}:skipped_customer"
 REDIS_KEY_LAST_KEY = f"{REDIS_KEY_PREFIX}:last_ticket"
+REDIS_KEY_NOTIFY_BREADS = f"{REDIS_KEY_PREFIX}:notify_breads"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 def seconds_until_midnight_iran():
@@ -356,13 +357,58 @@ async def get_last_ticket_number(r, bakery_id, fetch_from_redis_first=True):
 
         return last
 
+async def is_ticket_in_skipped_list(r, bakery_id, customer_id):
+    skipped_list = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
+    is_exists = await r.hget(skipped_list, customer_id)
+    return is_exists is not None
+
+
+async def get_bakery_notify_breads(r, bakery_id: int, fetch_from_redis_first: bool = True) -> list[int]:
+    key = REDIS_KEY_NOTIFY_BREADS.format(bakery_id)
+
+    if fetch_from_redis_first:
+        members = await r.smembers(key)
+        if members:
+            return [int(x) for x in members]
+
+    with SessionLocal() as db:
+        entries = crud.get_bakery_bread_notifies(db, bakery_id)
+        bread_ids = [e.bread_type_id for e in entries]
+
+    pipe = r.pipeline()
+    if bread_ids:
+        pipe.delete(key)
+        pipe.sadd(key, *[str(b) for b in bread_ids])
+    else:
+        # ensure the key exists but empty; set expire on empty set by using a placeholder then remove
+        pipe.delete(key)
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+    return bread_ids
+
+
+async def add_bakery_notify_bread(r, bakery_id: int, bread_id: int):
+    key = REDIS_KEY_NOTIFY_BREADS.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.sadd(key, str(bread_id))
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+
+
+async def remove_bakery_notify_bread(r, bakery_id: int, bread_id: int):
+    key = REDIS_KEY_NOTIFY_BREADS.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.srem(key, str(bread_id))
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+
+
 async def initialize_redis_sets(r, bakery_id: int):
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
     await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
     await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
     await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
-
-async def is_ticket_in_skipped_list(r, bakery_id, customer_id):
-    skipped_list = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
-    is_exists = await r.hget(skipped_list, customer_id)
-    return is_exists is not None
+    await get_bakery_notify_breads(r, bakery_id, fetch_from_redis_first=False)

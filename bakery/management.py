@@ -128,6 +128,7 @@ async def add_notify_bakery_bread(
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin)
 ):
+    r = request.app.state.redis
     try:
         entry = crud.add_bakery_bread_notify(db, data.bakery_id, data.bread_id)
         logger.info(f"{FILE_NAME}:add_notify_bakery_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
@@ -137,6 +138,7 @@ async def add_notify_bakery_bread(
     except database_helper.BreadDoesNotExist as e:
         db.rollback()
         raise HTTPException(status_code=404, detail=str(e))
+    await redis_helper.add_bakery_notify_bread(r, data.bakery_id, data.bread_id)
     return {'status': 'successfully added'}
 
 @router.delete('/notify/remove/{bakery_id}/{bread_id}')
@@ -147,8 +149,11 @@ async def remove_notify_bakery_bread(
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin)
 ):
+    r = request.app.state.redis
     removed = crud.remove_bakery_bread_notify(db, bakery_id, bread_id)
     logger.info(f"{FILE_NAME}:remove_notify_bakery_bread", extra={"bakery_id": bakery_id, "bread_id": bread_id, "removed": removed})
+    if removed:
+        await redis_helper.remove_bakery_notify_bread(r, bakery_id, bread_id)
     return {"status": "removed" if removed else "not_found"}
 
 
@@ -159,5 +164,6 @@ async def list_notify_bakery_bread(
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin)
 ):
-    entries = crud.get_bakery_bread_notifies(db, bakery_id)
-    return {'bread_ids': [e.bread_type_id for e in entries]}
+    r = request.app.state.redis
+    bread_ids = await redis_helper.get_bakery_notify_breads(r, bakery_id)
+    return {'bread_ids': bread_ids}
