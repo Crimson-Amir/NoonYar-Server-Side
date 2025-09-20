@@ -192,13 +192,14 @@ async def reset_bakery_metadata(r, bakery_id: int):
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
+        pipe = r.pipeline()
+        pipe.delete(time_key)
         if time_per_bread:
-            pipe = r.pipeline()
-            pipe.delete(time_key)
             pipe.hset(time_key, mapping=time_per_bread)
             ttl = seconds_until_midnight_iran()
             pipe.expire(time_key, ttl)
-            await pipe.execute()
+        
+        await pipe.execute()
         return time_per_bread
 
 
@@ -209,13 +210,15 @@ async def reset_bread_names(r):
         breads = crud.get_breads(db)
         bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
+        pipe = r.pipeline()
+        pipe.delete(bread_name_key)
+        
         if bread_names:
-            pipe = r.pipeline()
-            pipe.delete(bread_name_key)
             pipe.hset(bread_name_key, mapping=bread_names)
             ttl = seconds_until_midnight_iran()
             pipe.expire(bread_name_key, ttl)
-            await pipe.execute()
+        
+        await pipe.execute()
         return bread_names
 
 
@@ -229,14 +232,15 @@ async def get_bakery_bread_names(r):
         breads = crud.get_breads(db)
         bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
+        pipe = r.pipeline()
+        pipe.delete(bread_name_key)
+        
         if bread_names:
-            pipe = r.pipeline()
-            pipe.delete(bread_name_key)
             pipe.hset(bread_name_key, mapping=bread_names)
             ttl = seconds_until_midnight_iran()
             pipe.expire(bread_name_key, ttl)
-            await pipe.execute()
-
+        
+        await pipe.execute()
         return bread_names
 
 
@@ -265,8 +269,8 @@ async def get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=True,
         if reservation_dict:
             ttl = seconds_until_midnight_iran()
             pipe.expire(skipped_customer_key, ttl)
-            await pipe.execute()
-            print("fetch skipped customer from db")
+        await pipe.execute()
+        print("fetch skipped customer from db")
 
         return reservation_dict
 
@@ -298,12 +302,14 @@ async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True
             pipe.hset(reservations_key, str(customer.hardware_customer_id), ",".join(map(str, reservation)))
             pipe.zadd(order_key, {str(customer.hardware_customer_id): customer.hardware_customer_id})
 
+        
         if reservation_dict:
             ttl = seconds_until_midnight_iran()
             pipe.expire(reservations_key, ttl)
             pipe.expire(order_key, ttl)
-            await pipe.execute()
-            print("fetch reservation from db")
+        
+        await pipe.execute()
+        print("fetch reservation from db")
 
         return reservation_dict
 
@@ -324,16 +330,16 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
 
         bakery_breads = crud.get_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
+        pipe = r.pipeline()
+        pipe.delete(time_key)
 
         if time_per_bread:
-            pipe = r.pipeline()
-            pipe.delete(time_key)
             pipe.hset(time_key, mapping=time_per_bread)
             ttl = seconds_until_midnight_iran()
             pipe.expire(time_key, ttl)
-            await pipe.execute()
-            print("fetch time per bread from db")
-
+        
+        await pipe.execute()
+        print("fetch time per bread from db")
         return time_per_bread
 
 
