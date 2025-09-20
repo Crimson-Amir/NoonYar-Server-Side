@@ -406,13 +406,6 @@ async def remove_bakery_notify_bread(r, bakery_id: int, bread_id: int):
     await pipe.execute()
 
 
-async def initialize_redis_sets(r, bakery_id: int):
-    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
-    await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-    await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-    await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
-    await get_bakery_notify_breads(r, bakery_id, fetch_from_redis_first=False)
-    
 async def get_upcoming_notify_bread_counts(r, bakery_id: int, num_tickets: int) -> dict[str, int]:
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
     reservations_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
@@ -458,3 +451,12 @@ async def get_upcoming_notify_bread_counts(r, bakery_id: int, num_tickets: int) 
         totals.setdefault(key, 0)
 
     return totals
+
+
+async def initialize_redis_sets(r, bakery_id: int):
+    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
+    await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+    await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+    await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
+    await get_bakery_notify_breads(r, bakery_id, fetch_from_redis_first=False)
+    
