@@ -31,7 +31,7 @@ async def new_customer(
 
     r = request.app.state.redis
     bread_requirements = customer.bread_requirements
-    breads_type, reservation_dict = await redis_helper.fetch_metadata_and_reservations(r, bakery_id)
+    breads_type, reservation_dict, upcoming_set = await redis_helper.get_bakery_runtime_state(r, bakery_id)
     if breads_type.keys() != bread_requirements.keys():
         raise HTTPException(status_code=400, detail="Invalid bread types")
 
@@ -47,11 +47,17 @@ async def new_customer(
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
-    logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements})
+    # Add to upcoming customers ZSET if applicable
+    customer_in_upcoming_customer = await redis_helper.maybe_add_customer_to_upcoming_zset(
+        r, customer.bakery_id, customer_ticket_id, bread_requirements, upcoming_members=upcoming_set
+    )
+
+    logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements)
 
     return {
-        'customer_ticket_id': customer_ticket_id
+        'customer_ticket_id': customer_ticket_id,
+        'customer_in_upcoming_customer': customer_in_upcoming_customer
     }
 
 
