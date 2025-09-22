@@ -121,7 +121,7 @@ async def change_bread_names(
     return {'status': 'successfully updated'}
 
 
-@router.post('/notify/add')
+@router.post('/upcoming/add')
 @handle_errors
 async def add_notify_bakery_bread(
         request: Request,
@@ -131,18 +131,18 @@ async def add_notify_bakery_bread(
 ):
     r = request.app.state.redis
     try:
-        entry = crud.add_bakery_bread_notify(db, data.bakery_id, data.bread_id)
-        logger.info(f"{FILE_NAME}:add_notify_bakery_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
+        entry = crud.add_upcoming_bread_to_bakery(db, data.bakery_id, data.bread_id)
+    logger.info(f"{FILE_NAME}:add_upcoming_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail='Bread-notify already exists')
     except database_helper.BreadDoesNotExist as e:
         db.rollback()
         raise HTTPException(status_code=404, detail=str(e))
-    await redis_helper.add_bakery_notify_bread(r, data.bakery_id, data.bread_id)
+    await redis_helper.add_upcoming_bread_to_bakery(r, data.bakery_id, data.bread_id)
     return {'status': 'successfully added'}
 
-@router.delete('/notify/remove/{bakery_id}/{bread_id}')
+@router.delete('/upcoming/remove/{bakery_id}/{bread_id}')
 @handle_errors
 async def remove_notify_bakery_bread(
         request: Request,
@@ -152,14 +152,14 @@ async def remove_notify_bakery_bread(
         _: int = Depends(require_admin)
 ):
     r = request.app.state.redis
-    removed = crud.remove_bakery_bread_notify(db, bakery_id, bread_id)
-    logger.info(f"{FILE_NAME}:remove_notify_bakery_bread", extra={"bakery_id": bakery_id, "bread_id": bread_id, "removed": removed})
+    removed = crud.remove_upcoming_bread_from_bakery(db, bakery_id, bread_id)
+    logger.info(f"{FILE_NAME}:remove_upcoming_bread", extra={"bakery_id": bakery_id, "bread_id": bread_id, "removed": removed})
     if removed:
-        await redis_helper.remove_bakery_notify_bread(r, bakery_id, bread_id)
+        await redis_helper.remove_upcoming_bread_from_bakery(r, bakery_id, bread_id)
     return {"status": "removed" if removed else "not_found"}
 
 
-@router.get('/notify/list/{bakery_id}')
+@router.get('/upcoming/list/{bakery_id}')
 @handle_errors
 async def list_notify_bakery_bread(
         request: Request,
@@ -168,5 +168,5 @@ async def list_notify_bakery_bread(
         _: int = Depends(require_admin)
 ):
     r = request.app.state.redis
-    bread_ids = await redis_helper.get_bakery_notify_breads(r, bakery_id)
+    bread_ids = await redis_helper.get_bakery_upcoming_breads(r, bakery_id)
     return {'bread_ids': bread_ids}

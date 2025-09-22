@@ -69,8 +69,8 @@ class BakeryBread(Base):
     bread = relationship("BreadType", back_populates="bakery_associations")
 
 
-class BakeryBreadNotify(Base):
-    __tablename__ = 'bakery_bread_notify'
+class BakeryUpcomingBread(Base):
+    __tablename__ = 'bakery_upcoming_bread'
 
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), primary_key=True)
     bread_type_id = Column(Integer, ForeignKey('bread_type.bread_id', ondelete='CASCADE'), primary_key=True)

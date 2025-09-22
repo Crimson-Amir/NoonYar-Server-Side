@@ -152,7 +152,7 @@ def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: 
         return False
 
 
-def add_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
+def add_upcoming_bread_to_bakery(db: Session, bakery_id: int, bread_type_id: int):
     # Ensure the bakery-bread pair exists to avoid integrity errors
     exists = (
         db.query(models.BakeryBread)
@@ -164,17 +164,17 @@ def add_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
     if not exists:
         raise database_helper.BreadDoesNotExist()
 
-    entry = models.BakeryBreadNotify(bakery_id=bakery_id, bread_type_id=bread_type_id)
+    entry = models.BakeryUpcomingBread(bakery_id=bakery_id, bread_type_id=bread_type_id)
     db.add(entry)
     db.commit()
     return entry
 
-def remove_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
+def remove_upcoming_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: int):
     entry = (
-        db.query(models.BakeryBreadNotify)
+        db.query(models.BakeryUpcomingBread)
         .filter(
-            models.BakeryBreadNotify.bakery_id == bakery_id,
-            models.BakeryBreadNotify.bread_type_id == bread_type_id
+            models.BakeryUpcomingBread.bakery_id == bakery_id,
+            models.BakeryUpcomingBread.bread_type_id == bread_type_id
         ).first()
     )
     if entry:
@@ -183,10 +183,10 @@ def remove_bakery_bread_notify(db: Session, bakery_id: int, bread_type_id: int):
         return True
     return False
 
-def get_bakery_bread_notifies(db: Session, bakery_id: int):
+def get_bakery_upcoming_breads(db: Session, bakery_id: int):
     return (
-        db.query(models.BakeryBreadNotify)
-        .filter(models.BakeryBreadNotify.bakery_id == bakery_id)
+        db.query(models.BakeryUpcomingBread)
+        .filter(models.BakeryUpcomingBread.bakery_id == bakery_id)
         .all()
     )
 
