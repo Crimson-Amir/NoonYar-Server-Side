@@ -51,7 +51,7 @@ class Algorithm:
     @staticmethod
     def compute_bread_time(time_per_bread, reserve):
         return sum(
-            bread * time_per_bread.get(str(i), private.DEFAULT_BREAD_COOK_TIME_SECOND)
+            bread * time_per_bread.get(str(bread), private.DEFAULT_BREAD_COOK_TIME_SECOND)
             for bread in reserve
         )
 
