@@ -248,8 +248,8 @@ async def get_upcoming_customer(
     time_per_bread, reservations_map, frt_min, order_ids = await pipe.execute()
     # Cast Redis hash values (strings) to ints for computation
     if time_per_bread:
-        time_per_bread = {k: int(v) for k, v in time_per_bread.items()}
-        
+        time_per_bread = {str(k): int(v) for k, v in time_per_bread.items()}
+
     if not time_per_bread or not order_ids:
         return {"empty_upcoming": True}
 
@@ -267,6 +267,7 @@ async def get_upcoming_customer(
     in_queue_time = await alg.calculate_in_queue_customers_time(keys, customer_id, reservation_dict, time_per_bread, r=r, bakery_id=bakery_id)
     empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict))
     delivery_time_s = in_queue_time + empty_slot_time
+    print(time_per_bread, counts)
     cook_time_s = alg.compute_bread_time(time_per_bread, counts)
 
     full_round_time_s = full_round_time_min * 60

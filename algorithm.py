@@ -59,6 +59,7 @@ class Algorithm:
             for key in keys
             if key < index
         )
+        
         # Apply global timeout (minutes) if provided via Redis
         if r is not None and bakery_id is not None:
             timeout_min = await redis_helper.get_timeout_min(r, bakery_id)
