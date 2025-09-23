@@ -292,16 +292,19 @@ async def get_upcoming_customer(
 async def update_timeout(
         request: Request,
         data: schemas.UpdateTimeoutRequest,
-        db: Session = Depends(endpoint_helper.get_db),
         token: str = Depends(validate_token)
  ):
     bakery_id = data.bakery_id
     if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
+    db = SessionLocal()
 
-    new_timeout = crud.increment_timeout_min(db, bakery_id, data.minutes)
-    if new_timeout is None:
-        raise HTTPException(status_code=404, detail='Bakery not found')
+    try:
+        new_timeout = crud.increment_timeout_min(db, bakery_id, data.minutes)
+        if new_timeout is None:
+            raise HTTPException(status_code=404, detail='Bakery not found')
+    finally:
+        db.close()
 
     # Update Redis
     r = request.app.state.redis
