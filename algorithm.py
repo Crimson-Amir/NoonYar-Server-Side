@@ -50,8 +50,10 @@ class Algorithm:
 
     @staticmethod
     def compute_bread_time(time_per_bread, reserve):
-        return sum(bread * time_per_bread.get(str(index), private.DEFAULT_BREAD_COOK_TIME_SECOND)
-                   for index, bread in enumerate(reserve, start=1))
+        return sum(
+            bread * time_per_bread.get(str(i), private.DEFAULT_BREAD_COOK_TIME_SECOND)
+            for i in reserve
+        )
 
     async def calculate_in_queue_customers_time(self, keys, index, reservation_dict, time_per_bread, r=None, bakery_id=None):
         base = sum(
@@ -59,7 +61,7 @@ class Algorithm:
             for key in keys
             if key < index
         )
-        
+
         # Apply global timeout (minutes) if provided via Redis
         if r is not None and bakery_id is not None:
             timeout_min = await redis_helper.get_timeout_min(r, bakery_id)
