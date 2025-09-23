@@ -547,7 +547,7 @@ async def maybe_add_customer_to_upcoming_zset(
         members = set(upcoming_members)
 
     if not members: return False
-
+    print(members, bread_requirements.items())
     will_add = any((bid in members and int(count) > 0) for bid, count in bread_requirements.items())
     if not will_add: return False
 
@@ -604,7 +604,23 @@ async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True
     
     return value
 
+async def reset_timeout_min(r, bakery_id: int) -> int:
+    key = REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.delete(key)
+
+    with SessionLocal() as db:
+        crud.update_timeout_min(db, bakery_id, 0)
+        value = 0
+        pipe.set(key, value)
+        
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+    
+    return value
    
+
 async def initialize_redis_sets(r, bakery_id: int):
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
     await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
@@ -613,4 +629,4 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
     await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
-    await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)
+    await reset_timeout_min(r, bakery_id)
