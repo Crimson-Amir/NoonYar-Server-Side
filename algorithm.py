@@ -52,7 +52,7 @@ class Algorithm:
     def compute_bread_time(time_per_bread, reserve):
         return sum(
             bread * time_per_bread.get(str(i), private.DEFAULT_BREAD_COOK_TIME_SECOND)
-            for i in reserve
+            for bread in reserve
         )
 
     async def calculate_in_queue_customers_time(self, keys, index, reservation_dict, time_per_bread, r=None, bakery_id=None):
