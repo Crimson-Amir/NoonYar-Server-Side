@@ -426,7 +426,7 @@ async def get_upcoming_bread_counts(r, bakery_id: int, num_tickets: int) -> dict
     pipe.zrange(order_key, 0, max(0, num_tickets - 1))
     pipe.hgetall(REDIS_KEY_TIME_PER_BREAD.format(bakery_id))
     pipe.smembers(REDIS_KEY_UPCOMING_BREADS.format(bakery_id))
-    upcoming_ids, time_per_bread_raw, notify_members = await pipe.execute()
+    upcoming_ids, time_per_bread_raw, upcoming_memeber = await pipe.execute()
 
     if not upcoming_ids:
         return {}
@@ -437,11 +437,11 @@ async def get_upcoming_bread_counts(r, bakery_id: int, num_tickets: int) -> dict
     else:
         bread_id_order = list(time_per_bread_raw.keys())
 
-    if not notify_members:
-        notify_members = await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
+    if not upcoming_memeber:
+        upcoming_memeber = await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
         
-    notify_set = set(int(x) for x in notify_members) if notify_members else set()
-    if not notify_set: return {}
+    upcoming_set = set(int(x) for x in upcoming_set) if upcoming_set else set()
+    if not upcoming_set: return {}
 
     reservations_list = await r.hmget(reservations_key, *upcoming_ids)
 
@@ -455,10 +455,10 @@ async def get_upcoming_bread_counts(r, bakery_id: int, num_tickets: int) -> dict
                 break
             bread_id_str = bread_id_order[idx]
             bread_id_int = int(bread_id_str)
-            if bread_id_int in notify_set and count:
+            if bread_id_int in upcoming_set and count:
                 totals[bread_id_str] = totals.get(bread_id_str, 0) + count
     
-    for bread_id in notify_set:
+    for bread_id in upcoming_set:
         key = str(bread_id)
         totals.setdefault(key, 0)
 

@@ -3,7 +3,7 @@ import crud
 from logger_config import logger
 import schemas
 from sqlalchemy.orm import Session
-from helpers import endpoint_helper, redis_helper
+from helpers import endpoint_helper, redis_helper, database_helper
 import mqtt_client
 from sqlalchemy.exc import IntegrityError
 
