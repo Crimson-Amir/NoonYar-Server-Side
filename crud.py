@@ -269,7 +269,7 @@ def get_today_last_customer(db: Session, bakery_id: int):
 
     return last_customer
 
-def increment_timeout_min(db: Session, bakery_id: int, delta_minutes: int) -> int | None:
+def update_timeout_min(db: Session, bakery_id: int, delta_minutes: int) -> int | None:
     stmt = (
         update(models.Bakery)
         .where(models.Bakery.bakery_id == bakery_id)

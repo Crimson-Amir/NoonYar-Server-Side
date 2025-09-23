@@ -287,7 +287,7 @@ async def get_upcoming_customer(
     }
 
 
-@router.post('/timeout/{bakery_id}')
+@router.post('/timeout/update')
 @handle_errors
 async def update_timeout(
         request: Request,
@@ -300,7 +300,7 @@ async def update_timeout(
     db = SessionLocal()
 
     try:
-        new_timeout = crud.increment_timeout_min(db, bakery_id, data.minutes)
+        new_timeout = crud.update_timeout_min(db, bakery_id, data.minutes)
         if new_timeout is None:
             raise HTTPException(status_code=404, detail='Bakery not found')
     finally:
