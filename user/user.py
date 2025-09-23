@@ -45,9 +45,10 @@ async def queue_check(request: Request, b: int, r: int):
     reservation_number = r if is_user_exist else sorted_keys[-1]
     people_in_queue = sum(1 for key in sorted_keys if key < reservation_number)
     average_bread_time = sum(bread_time.values()) // len(bread_time)
-
+    sorted_keys = sorted(bread_time.keys(), key=lambda k: int(k))
+    time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
     in_queue_customers_time = await algorithm_instance.calculate_in_queue_customers_time(
-        sorted_keys, reservation_number, reservation_dict, bread_time, r=request.app.state.redis, bakery_id=b)
+        sorted_keys, reservation_number, reservation_dict, time_per_bread_list, r=request.app.state.redis, bakery_id=b)
 
     empty_slot_time = algorithm_instance.compute_empty_slot_time(
         sorted_keys, reservation_number, reservation_dict) * average_bread_time

@@ -49,16 +49,15 @@ class Algorithm:
         return new_key
 
     @staticmethod
-    def compute_bread_time(time_per_bread, reserve):
-        time_per_bread_list = list(time_per_bread.values())
+    def compute_bread_time(time_per_bread_list, reserve):
         return sum(
             bread * time_per_bread_list[index]
             for index, bread in enumerate(reserve)
         )
 
-    async def calculate_in_queue_customers_time(self, keys, index, reservation_dict, time_per_bread, r=None, bakery_id=None):
+    async def calculate_in_queue_customers_time(self, keys, index, reservation_dict, time_per_bread_list, r=None, bakery_id=None):
         base = sum(
-            self.compute_bread_time(time_per_bread, reservation_dict[key])
+            self.compute_bread_time(time_per_bread_list, reservation_dict[key])
             for key in keys
             if key < index
         )

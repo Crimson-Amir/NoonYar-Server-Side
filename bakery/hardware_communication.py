@@ -262,13 +262,16 @@ async def get_upcoming_customer(
     full_round_time_min = int(frt_min) if frt_min else 0
 
     reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in (reservations_map or {}).items() if v}
-
+    sorted_keys = sorted(time_per_bread.keys(), key=lambda k: int(k))
+    time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
     alg = algorithm.Algorithm()
-    in_queue_time = await alg.calculate_in_queue_customers_time(keys, customer_id, reservation_dict, time_per_bread, r=r, bakery_id=bakery_id)
+    in_queue_time = await alg.calculate_in_queue_customers_time(keys, customer_id, reservation_dict_list, time_per_bread_list, r=r, bakery_id=bakery_id)
     empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict))
     delivery_time_s = in_queue_time + empty_slot_time
     print(time_per_bread, counts)
-    cook_time_s = alg.compute_bread_time(time_per_bread, counts)
+    # Ensure deterministic order: sort by numeric bread id, then extract values
+
+    cook_time_s = alg.compute_bread_time(time_per_bread_list, counts)
 
     full_round_time_s = full_round_time_min * 60
 
