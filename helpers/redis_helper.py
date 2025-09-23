@@ -558,17 +558,7 @@ async def maybe_add_customer_to_upcoming_zset(
     await pipe2.execute()
     return True
     
-    
-async def initialize_redis_sets(r, bakery_id: int):
-    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
-    await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-    await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-    await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
-    await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
-    await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
-    await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
-    await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)
-
+ 
 
 async def get_full_round_time_min(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
     key = REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
@@ -613,3 +603,14 @@ async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True
     await pipe.execute()
     
     return value
+
+   
+async def initialize_redis_sets(r, bakery_id: int):
+    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
+    await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+    await get_bakery_skipped_customer(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+    await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
+    await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
+    await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
+    await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
+    await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)

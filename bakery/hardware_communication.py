@@ -294,29 +294,26 @@ async def update_timeout(
         data: schemas.UpdateTimeoutRequest,
         db: Session = Depends(endpoint_helper.get_db),
         token: str = Depends(validate_token)
-):
+ ):
     bakery_id = data.bakery_id
     if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    bakery = crud.get_bakery(db, bakery_id)
-    if not bakery:
+    new_timeout = crud.increment_timeout_min(db, bakery_id, data.minutes)
+    if new_timeout is None:
         raise HTTPException(status_code=404, detail='Bakery not found')
-
-    bakery.timeout_min = (bakery.timeout_min or 0) + data.minutes
-    db.commit()
 
     # Update Redis
     r = request.app.state.redis
     key = redis_helper.REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
     pipe = r.pipeline()
-    pipe.set(key, bakery.timeout_min)
+    pipe.set(key, new_timeout)
     ttl = redis_helper.seconds_until_midnight_iran()
     pipe.expire(key, ttl)
     await pipe.execute()
 
-    logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": bakery.timeout_min})
-    return {"timeout_min": bakery.timeout_min}
+    logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
+    return {"timeout_min": new_timeout}
 
 @router.get('/hardware_init')
 @handle_errors

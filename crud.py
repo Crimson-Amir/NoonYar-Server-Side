@@ -269,6 +269,17 @@ def get_today_last_customer(db: Session, bakery_id: int):
 
     return last_customer
 
+def increment_timeout_min(db: Session, bakery_id: int, delta_minutes: int) -> int | None:
+    stmt = (
+        update(models.Bakery)
+        .where(models.Bakery.bakery_id == bakery_id)
+        .values(timeout_min=models.Bakery.timeout_min + delta_minutes)
+        .returning(models.Bakery.timeout_min)
+    )
+    result = db.execute(stmt).scalar()
+    db.commit()
+    return result
+
 # def get_otp(db: Session, phone_number: str):
 #     otp_entry = db.query(models.OTP).filter(
 #         models.OTP.phone_number == phone_number,
