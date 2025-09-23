@@ -216,6 +216,108 @@ async def upcoming_notify_counts(
     return counts
 
 
+@router.get('/upcoming/first/{bakery_id}')
+@handle_errors
+async def get_upcoming_customer(
+        request: Request,
+        bakery_id: int,
+        token: str = Depends(validate_token)
+):
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    # Fetch earliest upcoming customer id
+    zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
+    members = await r.zrange(zkey, 0, 0)
+    if not members:
+        return {"empty_upcoming": True}
+    customer_id = int(members[0])
+
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    pipe.get(frt_key)
+    pipe.zrange(order_key, 0, -1)
+    time_per_bread, reservations_map, frt_min, order_ids = await pipe.execute()
+
+    if not time_per_bread or not order_ids:
+        return {"empty_upcoming": True}
+
+    reservation_str = reservations_map.get(str(customer_id)) if reservations_map else None
+    if not reservation_str:
+        return {"empty_upcoming": True}
+    
+    counts = [int(x) for x in reservation_str.split(',')]
+    keys = [int(x) for x in order_ids]
+    full_round_time_min = int(frt_min) if frt_min else 0
+
+    reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in (reservations_map or {}).items() if v}
+
+    alg = algorithm.Algorithm()
+    in_queue_time = await alg.calculate_in_queue_customers_time(keys, customer_id, reservation_dict, time_per_bread, r=r, bakery_id=bakery_id)
+    empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict))
+    delivery_time_s = in_queue_time + empty_slot_time
+    cook_time_s = alg.compute_bread_time(time_per_bread, counts)
+
+    full_round_time_s = full_round_time_min * 60
+
+    notification_lead_time_s = cook_time_s + full_round_time_s
+    
+    is_ready = delivery_time_s <= notification_lead_time_s
+
+    return {
+        "empty_upcoming": False,
+        "customer_id": customer_id,
+        "time_per_bread": time_per_bread,
+        "counts": counts,
+        "in_queue_time_s": in_queue_time,
+        "empty_slot_time_s": empty_slot_time,
+        "delivery_time_s": delivery_time_s,
+        "cook_time_s": cook_time_s,
+        "full_round_time_min": full_round_time_min,
+        "notification_lead_time_s": notification_lead_time_s,
+        "ready": is_ready
+    }
+
+
+@router.post('/timeout/{bakery_id}')
+@handle_errors
+async def update_timeout(
+        request: Request,
+        data: schemas.UpdateTimeoutRequest,
+        db: Session = Depends(endpoint_helper.get_db),
+        token: str = Depends(validate_token)
+):
+    bakery_id = data.bakery_id
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    bakery = crud.get_bakery(db, bakery_id)
+    if not bakery:
+        raise HTTPException(status_code=404, detail='Bakery not found')
+
+    bakery.timeout_min = (bakery.timeout_min or 0) + data.minutes
+    db.commit()
+
+    # Update Redis
+    r = request.app.state.redis
+    key = redis_helper.REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.set(key, bakery.timeout_min)
+    ttl = redis_helper.seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+
+    logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": bakery.timeout_min})
+    return {"timeout_min": bakery.timeout_min}
+
 @router.get('/hardware_init')
 @handle_errors
 async def hardware_initialize(request: Request, bakery_id: int):

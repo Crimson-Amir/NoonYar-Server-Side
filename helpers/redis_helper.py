@@ -12,6 +12,8 @@ REDIS_KEY_SKIPPED_CUSTOMER = f"{REDIS_KEY_PREFIX}:skipped_customer"
 REDIS_KEY_LAST_KEY = f"{REDIS_KEY_PREFIX}:last_ticket"
 REDIS_KEY_UPCOMING_BREADS = f"{REDIS_KEY_PREFIX}:upcoming_breads"
 REDIS_KEY_UPCOMING_CUSTOMERS = f"{REDIS_KEY_PREFIX}:upcoming_customers"
+REDIS_KEY_FULL_ROUND_TIME_MIN = f"{REDIS_KEY_PREFIX}:full_round_time_min"
+REDIS_KEY_TIMEOUT_MIN = f"{REDIS_KEY_PREFIX}:timeout_min"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 def seconds_until_midnight_iran():
@@ -564,3 +566,50 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
     await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
+    await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
+    await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)
+
+
+async def get_full_round_time_min(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
+    key = REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+    if fetch_from_redis_first:
+        val = await r.get(key)
+        if val is not None:
+            return int(val)
+
+    # Delete key and fetch from DB (source of truth)
+    pipe = r.pipeline()
+    pipe.delete(key)
+
+    with SessionLocal() as db:
+        bakery = crud.get_bakery(db, bakery_id)
+        value = bakery.full_round_time_min
+        pipe.set(key, value)
+        
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+    
+    return value
+
+
+async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
+    key = REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
+    if fetch_from_redis_first:
+        val = await r.get(key)
+        if val is not None:
+            return int(val)
+
+    pipe = r.pipeline()
+    pipe.delete(key)
+
+    with SessionLocal() as db:
+        bakery = crud.get_bakery(db, bakery_id)
+        value = bakery.timeout_min
+        pipe.set(key, value)
+        
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+    
+    return value

@@ -170,3 +170,4 @@ async def list_notify_bakery_bread(
     r = request.app.state.redis
     bread_ids = await redis_helper.get_bakery_upcoming_breads(r, bakery_id)
     return {'bread_ids': bread_ids}
+

@@ -64,3 +64,6 @@ class ModifyBakeryBreadNotify(BakeryID, BreadID):
 
 class UpcomingNotifyRequest(BakeryID):
     num_tickets: int
+
+class UpdateTimeoutRequest(BakeryID):
+    minutes: int
