@@ -47,7 +47,6 @@ async def new_customer(
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
-    print(upcoming_set)
     # Add to upcoming customers ZSET if applicable
     customer_in_upcoming_customer = await redis_helper.maybe_add_customer_to_upcoming_zset(
         r, customer.bakery_id, customer_ticket_id, bread_requirements, upcoming_members=upcoming_set

@@ -50,7 +50,7 @@ class Algorithm:
 
     @staticmethod
     def compute_bread_time(time_per_bread, reserve):
-        return sum(bread * time_per_bread.get(str(index), private.DEFAULT_BREAD_COOK_TIME_SECOND)
+        return sum(bread * int(time_per_bread.get(str(index)), private.DEFAULT_BREAD_COOK_TIME_SECOND)
                    for index, bread in enumerate(reserve, start=1))
 
     async def calculate_in_queue_customers_time(self, keys, index, reservation_dict, time_per_bread, r=None, bakery_id=None):

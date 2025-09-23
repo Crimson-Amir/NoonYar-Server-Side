@@ -547,7 +547,6 @@ async def maybe_add_customer_to_upcoming_zset(
         members = set(upcoming_members)
 
     if not members: return False
-    print(members, bread_requirements.items())
     will_add = any((bid in members and int(count) > 0) for bid, count in bread_requirements.items())
     if not will_add: return False
 
