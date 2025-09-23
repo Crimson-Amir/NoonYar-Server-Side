@@ -246,7 +246,10 @@ async def get_upcoming_customer(
     pipe.get(frt_key)
     pipe.zrange(order_key, 0, -1)
     time_per_bread, reservations_map, frt_min, order_ids = await pipe.execute()
-
+    # Cast Redis hash values (strings) to ints for computation
+    if time_per_bread:
+        time_per_bread = {k: int(v) for k, v in time_per_bread.items()}
+        
     if not time_per_bread or not order_ids:
         return {"empty_upcoming": True}
 
