@@ -268,9 +268,9 @@ async def get_upcoming_customer(
     average_bread_time = sum(time_per_bread.values()) // len(time_per_bread)
     in_queue_time = await alg.calculate_in_queue_customers_time(
         keys, customer_id, reservation_dict, time_per_bread_list, r=r, bakery_id=bakery_id
-    ) * average_bread_time
+    )
 
-    empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict))
+    empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict)) * average_bread_time
     delivery_time_s = in_queue_time + empty_slot_time
     print(time_per_bread, counts)
     # Ensure deterministic order: sort by numeric bread id, then extract values
