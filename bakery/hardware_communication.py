@@ -248,7 +248,7 @@ async def get_upcoming_customer(
     time_per_bread, reservations_map, frt_min, order_ids = await pipe.execute()
     # Cast Redis hash values (strings) to ints for computation
     if time_per_bread:
-        time_per_bread = {str(k): int(v) for k, v in time_per_bread.items()}
+        time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
 
     if not time_per_bread or not order_ids:
         return {"empty_upcoming": True}
@@ -262,7 +262,7 @@ async def get_upcoming_customer(
     full_round_time_min = int(frt_min) if frt_min else 0
 
     reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in (reservations_map or {}).items() if v}
-    sorted_keys = sorted(time_per_bread.keys(), key=lambda k: int(k))
+    sorted_keys = sorted(time_per_bread.keys())
     time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
     alg = algorithm.Algorithm()
     in_queue_time = await alg.calculate_in_queue_customers_time(keys, customer_id, reservation_dict, time_per_bread_list, r=r, bakery_id=bakery_id)

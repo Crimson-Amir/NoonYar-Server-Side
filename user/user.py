@@ -38,6 +38,9 @@ async def queue_check(request: Request, b: int, r: int):
     bread_time = await redis_helper.get_bakery_time_per_bread(request.app.state.redis, b)
     bread_names = await redis_helper.get_bakery_bread_names(request.app.state.redis)
 
+    bread_time = {int(k): int(v) for k, v in bread_time.items()}
+    reservation_dict = {int(k): v for k, v in reservation_dict.items()}
+
     if not bread_time:
         return {'msg': 'bakery does not exist'}
     if not reservation_dict:
@@ -50,7 +53,7 @@ async def queue_check(request: Request, b: int, r: int):
     reservation_number = r if is_user_exist else sorted_keys[-1]
     people_in_queue = sum(1 for key in sorted_keys if key < reservation_number)
     average_bread_time = sum(bread_time.values()) // len(bread_time)
-    sorted_keys = sorted(bread_time.keys(), key=lambda k: int(k))
+    sorted_keys = sorted(bread_time.keys())
     time_per_bread_list = [bread_time[k] for k in sorted_keys]
 
     in_queue_customers_time = await algorithm_instance.calculate_in_queue_customers_time(
