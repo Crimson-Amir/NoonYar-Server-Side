@@ -286,13 +286,10 @@ async def get_upcoming_customer(
     return {
         "empty_upcoming": False,
         "customer_id": customer_id,
-        "time_per_bread": time_per_bread,
-        "counts": counts,
         "in_queue_time_s": in_queue_time,
         "empty_slot_time_s": empty_slot_time,
         "delivery_time_s": delivery_time_s,
         "cook_time_s": cook_time_s,
-        "full_round_time_min": full_round_time_min,
         "notification_lead_time_s": notification_lead_time_s,
         "ready": is_ready
     }
