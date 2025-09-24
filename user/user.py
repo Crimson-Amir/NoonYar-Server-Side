@@ -50,7 +50,7 @@ async def queue_check(request: Request, b: int, r: int):
     reservation_number = r if is_user_exist else sorted_keys[-1]
     people_in_queue = sum(1 for key in sorted_keys if key < reservation_number)
     average_bread_time = sum(bread_time.values()) // len(bread_time)
-    sorted_keys = sorted(map(int, bread_time.keys()), key=lambda k: int(k))
+    sorted_keys = sorted(bread_time.keys(), key=lambda k: int(k))
     time_per_bread_list = [int(bread_time[k]) for k in sorted_keys]
 
     in_queue_customers_time = await algorithm_instance.calculate_in_queue_customers_time(
