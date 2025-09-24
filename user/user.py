@@ -24,11 +24,13 @@ async def decode_access_token(request):
 async def root(): return RedirectResponse('/home')
 
 @router.api_route('/home', methods=['POST', 'GET'])
+@handle_errors
 async def home(request: Request):
     data = await decode_access_token(request)
     return {'status': 'OK', 'data': data}
 
 @router.get("/res/")
+@handle_errors
 async def queue_check(request: Request, b: int, r: int):
     data = await decode_access_token(request)
 
