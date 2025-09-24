@@ -31,15 +31,22 @@ async def home(request: Request):
 
 @router.get("/res/")
 @handle_errors
-async def queue_check(request: Request, b: int, r: int):
+async def queue_check(request: Request, b: int, t: int):
     data = await decode_access_token(request)
+    r = request.app.state.redis
 
-    reservation_dict = await redis_helper.get_bakery_reservations(request.app.state.redis, b)
-    bread_time = await redis_helper.get_bakery_time_per_bread(request.app.state.redis, b)
-    bread_names = await redis_helper.get_bakery_bread_names(request.app.state.redis)
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(b)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(b)
+    name_key = redis_helper.REDIS_KEY_BREAD_NAMES
 
-    bread_time = {int(k): int(v) for k, v in bread_time.items()}
-    reservation_dict = {int(k): v for k, v in reservation_dict.items()}
+    pipe = r.pipeline()
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    pipe.hgetall(name_key)
+    time_per_bread, reservations_map, bread_names = await pipe.execute()
+
+    bread_time = {int(k): int(v) for k, v in time_per_bread.items()}
+    reservation_dict = {int(k): v for k, v in reservations_map.items()}
 
     if not bread_time:
         return {'msg': 'bakery does not exist'}
@@ -49,8 +56,8 @@ async def queue_check(request: Request, b: int, r: int):
     sorted_keys = sorted(reservation_dict.keys())
     algorithm_instance = Algorithm()
 
-    is_user_exist = r in sorted_keys
-    reservation_number = r if is_user_exist else sorted_keys[-1]
+    is_user_exist = t in sorted_keys
+    reservation_number = t if is_user_exist else sorted_keys[-1]
     people_in_queue = sum(1 for key in sorted_keys if key < reservation_number)
     average_bread_time = sum(bread_time.values()) // len(bread_time)
     sorted_keys = sorted(bread_time.keys())

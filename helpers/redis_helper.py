@@ -12,6 +12,7 @@ REDIS_KEY_SKIPPED_CUSTOMER = f"{REDIS_KEY_PREFIX}:skipped_customer"
 REDIS_KEY_LAST_KEY = f"{REDIS_KEY_PREFIX}:last_ticket"
 REDIS_KEY_UPCOMING_BREADS = f"{REDIS_KEY_PREFIX}:upcoming_breads"
 REDIS_KEY_UPCOMING_CUSTOMERS = f"{REDIS_KEY_PREFIX}:upcoming_customers"
+REDIS_KEY_CURRENT_UPCOMING_CUSTOMER = f"{REDIS_KEY_PREFIX}:current_upcoming_customer"
 REDIS_KEY_FULL_ROUND_TIME_MIN = f"{REDIS_KEY_PREFIX}:full_round_time_min"
 REDIS_KEY_TIMEOUT_MIN = f"{REDIS_KEY_PREFIX}:timeout_min"
 REDIS_KEY_BREAD_NAMES = "bread_names"
@@ -376,22 +377,22 @@ async def is_ticket_in_skipped_list(r, bakery_id, customer_id):
     return is_exists is not None
 
 
-async def get_bakery_upcoming_breads(r, bakery_id: int, fetch_from_redis_first: bool = True) -> list[int]:
+async def get_bakery_upcoming_breads(r, bakery_id: int, fetch_from_redis_first: bool = True) -> list[str]:
     key = REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
 
     if fetch_from_redis_first:
         members = await r.smembers(key)
         if members:
-            return [int(x) for x in members]
+            return list(members)
 
     with SessionLocal() as db:
         entries = crud.get_bakery_upcoming_breads(db, bakery_id)
-        bread_ids = [e.bread_type_id for e in entries]
+        bread_ids = [str(e.bread_type_id) for e in entries]
 
     pipe = r.pipeline()
     if bread_ids:
         pipe.delete(key)
-        pipe.sadd(key, *[str(b) for b in bread_ids])
+        pipe.sadd(key, *bread_ids)
     else:
         pipe.delete(key)
     ttl = seconds_until_midnight_iran()
@@ -440,7 +441,7 @@ async def get_upcoming_bread_counts(r, bakery_id: int, num_tickets: int) -> dict
     if not upcoming_memeber:
         upcoming_memeber = await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
         
-    upcoming_set = set(int(x) for x in upcoming_set) if upcoming_set else set()
+    upcoming_set = set(upcoming_memeber) if upcoming_memeber else set()
     if not upcoming_set: return {}
 
     reservations_list = await r.hmget(reservations_key, *upcoming_ids)
@@ -454,13 +455,11 @@ async def get_upcoming_bread_counts(r, bakery_id: int, num_tickets: int) -> dict
             if idx >= len(bread_id_order):
                 break
             bread_id_str = bread_id_order[idx]
-            bread_id_int = int(bread_id_str)
-            if bread_id_int in upcoming_set and count:
+            if bread_id_str in upcoming_set and count:
                 totals[bread_id_str] = totals.get(bread_id_str, 0) + count
     
     for bread_id in upcoming_set:
-        key = str(bread_id)
-        totals.setdefault(key, 0)
+        totals.setdefault(bread_id, 0)
 
     return totals
 
@@ -493,8 +492,7 @@ async def ensure_upcoming_customers_zset(
     if not time_per_bread:
         time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
     if not upcoming_members:
-        await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
-        upcoming_members = await r.smembers(upcoming_key)
+        upcoming_members = await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
     if not reservations:
         rebuilt = await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
         reservations = {str(k): ",".join(map(str, v)) for k, v in rebuilt.items()}
@@ -541,14 +539,14 @@ async def maybe_add_customer_to_upcoming_zset(
     ukey = REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
 
     if upcoming_members is None:
-        fetched = set(map(str, await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)))
-        members = fetched
-    else:
-        members = set(upcoming_members)
+        upcoming_members = await get_bakery_upcoming_breads(r, bakery_id)
+    members = set(upcoming_members)
 
-    if not members: return False
+    if not members:
+        return False
     will_add = any((bid in members and int(count) > 0) for bid, count in bread_requirements.items())
-    if not will_add: return False
+    if not will_add:
+        return False
 
     pipe2 = r.pipeline()
     pipe2.zadd(zkey, {str(customer_id): int(customer_id)})

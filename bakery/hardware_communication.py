@@ -228,7 +228,6 @@ async def get_upcoming_customer(
 
     r = request.app.state.redis
 
-    # Fetch earliest upcoming customer id
     zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
     members = await r.zrange(zkey, 0, 0)
     if not members:
@@ -246,7 +245,7 @@ async def get_upcoming_customer(
     pipe.get(frt_key)
     pipe.zrange(order_key, 0, -1)
     time_per_bread, reservations_map, frt_min, order_ids = await pipe.execute()
-    # Cast Redis hash values (strings) to ints for computation
+
     if time_per_bread:
         time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
 
@@ -254,6 +253,7 @@ async def get_upcoming_customer(
         return {"empty_upcoming": True}
 
     reservation_str = reservations_map.get(str(customer_id)) if reservations_map else None
+
     if not reservation_str:
         return {"empty_upcoming": True}
     
@@ -261,7 +261,8 @@ async def get_upcoming_customer(
     keys = [int(x) for x in order_ids]
     full_round_time_min = int(frt_min) if frt_min else 0
 
-    reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in (reservations_map or {}).items() if v}
+    reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
+
     sorted_keys = sorted(time_per_bread.keys())
     time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
     alg = algorithm.Algorithm()
@@ -279,9 +280,16 @@ async def get_upcoming_customer(
 
     full_round_time_s = full_round_time_min * 60
 
-    notification_lead_time_s = cook_time_s + full_round_time_s
+    notification_lead_time_s = cook_time_s + full_round_time_s # 120 < 100
     
     is_ready = delivery_time_s <= notification_lead_time_s
+
+    if is_ready:
+        cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
+        pipe2 = r.pipeline()
+        pipe2.setex(cur_key, cook_time_s, customer_id)
+        pipe2.zrem(zkey, customer_id)
+        await pipe2.execute()
 
     return {
         "empty_upcoming": False,
