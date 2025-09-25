@@ -59,7 +59,7 @@ class Algorithm:
         base = sum(
             self.compute_bread_time(time_per_bread_list, reservation_dict[key])
             for key in keys
-            if key < index
+            if key <= index
         )
 
         # Apply global timeout (minutes) if provided via Redis

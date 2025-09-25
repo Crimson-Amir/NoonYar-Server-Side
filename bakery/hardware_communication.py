@@ -230,6 +230,7 @@ async def get_upcoming_customer(
 
     cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
     customer_id = await r.get(cur_key)
+
     zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
 
     if customer_id:
@@ -272,21 +273,18 @@ async def get_upcoming_customer(
     sorted_keys = sorted(time_per_bread.keys())
     time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
     alg = algorithm.Algorithm()
-    average_bread_time = sum(time_per_bread.values()) // len(time_per_bread)
+    max_bread_time = max(time_per_bread.values())
     in_queue_time = await alg.calculate_in_queue_customers_time(
         keys, customer_id, reservation_dict, time_per_bread_list, r=r, bakery_id=bakery_id
     )
 
-    empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict)) * average_bread_time
+    empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict) * max_bread_time)
     delivery_time_s = in_queue_time + empty_slot_time
-    print(time_per_bread, counts)
-    # Ensure deterministic order: sort by numeric bread id, then extract values
-
     cook_time_s = alg.compute_bread_time(time_per_bread_list, counts)
 
     full_round_time_s = full_round_time_min * 60
 
-    notification_lead_time_s = cook_time_s + full_round_time_s # 120 < 100
+    notification_lead_time_s = cook_time_s + full_round_time_s
     
     is_ready = delivery_time_s <= notification_lead_time_s
 

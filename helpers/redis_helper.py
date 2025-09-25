@@ -629,6 +629,7 @@ async def initialize_redis_sets(r, bakery_id: int):
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
     await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
     await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)
+    # TODO: REMOVE CURRENT_CUSTOMER HERE
 
 async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
     await reset_timeout_min(r, bakery_id)
