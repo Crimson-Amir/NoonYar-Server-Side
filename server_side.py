@@ -29,11 +29,12 @@ async def lifespan(app: FastAPI):
     app.state.mqtt_client = aiomqtt.Client(hostname=MQTT_BROKER_HOST, port=MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
-    tasks.initialize_bakeries_redis_sets.delay()
+    tasks.initialize_bakeries_redis_sets.delay(mid_night=False)
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Tehran"))
     scheduler.add_job(
         tasks.initialize_bakeries_redis_sets.delay,
-        CronTrigger(hour=0, minute=0, timezone=ZoneInfo("Asia/Tehran"))
+        CronTrigger(hour=0, minute=0, timezone=ZoneInfo("Asia/Tehran")),
+        args=[True]
     )
     scheduler.start()
 

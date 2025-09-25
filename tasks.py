@@ -168,17 +168,16 @@ def send_otp(self, mobile_number, code, expire_m=10):
 
 @celery_app.task(bind=True)
 @handle_task_errors
-def initialize_bakeries_redis_sets(self):
+def initialize_bakeries_redis_sets(self, mid_night):
     with SessionLocal() as session:
         all_bakeries = crud.get_all_bakeries(session)
         for bakery in all_bakeries:
-            initialize_bakery_redis_sets.delay(bakery.bakery_id)
-
+            initialize_bakery_redis_sets.delay(bakery.bakery_id, mid_night=mid_night)
 
 # TODO: make this fucntion standard
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 1, "countdown": 5})
 @handle_task_errors
-def initialize_bakery_redis_sets(self, bakery_id):
+def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
     async def _task():
         r = aioredis.Redis(
             host="localhost",
@@ -188,7 +187,8 @@ def initialize_bakery_redis_sets(self, bakery_id):
         )
         try:
             await redis_helper.initialize_redis_sets(r, bakery_id)
-            await redis_helper.initialize_redis_sets_only_12_oclock(r, bakery_id)
+            if mid_night:
+                await redis_helper.initialize_redis_sets_only_12_oclock(r, bakery_id)
         finally:
             await r.close()
 
