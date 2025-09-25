@@ -188,7 +188,8 @@ def initialize_bakery_redis_sets(self, bakery_id):
         )
         try:
             await redis_helper.initialize_redis_sets(r, bakery_id)
+            await redis_helper.initialize_redis_sets_only_12_oclock(r, bakery_id)
         finally:
-            r.close()
+            await r.close()
 
     asyncio.run(_task())

@@ -596,9 +596,8 @@ async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True
         if bakery:
             value = bakery.timeout_min
             pipe.set(key, value)
-        
-    ttl = seconds_until_midnight_iran()
-    pipe.expire(key, ttl)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(key, ttl)
     await pipe.execute()
     
     return value
@@ -630,4 +629,7 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
     await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
+    await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)
+
+async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
     await reset_timeout_min(r, bakery_id)
