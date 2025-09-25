@@ -592,7 +592,7 @@ async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True
 
     with SessionLocal() as db:
         bakery = crud.get_bakery(db, bakery_id)
-        value = 0
+        value = None
         if bakery:
             value = bakery.timeout_min
             pipe.set(key, value)
@@ -609,9 +609,11 @@ async def reset_timeout_min(r, bakery_id: int) -> int:
     pipe.delete(key)
 
     with SessionLocal() as db:
-        crud.update_timeout_min(db, bakery_id, 0)
-        value = 0
-        pipe.set(key, value)
+        res = crud.update_timeout_min(db, bakery_id, 0)
+        value = None
+        if res is None:
+            value = 0
+            pipe.set(key, value)
         
     ttl = seconds_until_midnight_iran()
     pipe.expire(key, ttl)
