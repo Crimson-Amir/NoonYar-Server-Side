@@ -230,11 +230,11 @@ async def get_upcoming_customer(
 
     cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
     customer_id = await r.get(cur_key)
+    zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
 
     if customer_id:
         customer_id = int(customer_id)
     else:
-        zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
         members = await r.zrange(zkey, 0, 0)
         if not members:
             return {"empty_upcoming": True}

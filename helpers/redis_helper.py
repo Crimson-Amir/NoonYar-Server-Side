@@ -592,7 +592,6 @@ async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True
 
     with SessionLocal() as db:
         bakery = crud.get_bakery(db, bakery_id)
-        print(bakery)
         value = None
         if bakery:
             value = bakery.timeout_min
@@ -610,7 +609,6 @@ async def reset_timeout_min(r, bakery_id: int) -> int:
 
     with SessionLocal() as db:
         res = crud.update_timeout_min(db, bakery_id, 0)
-        print(res)
         value = None
         if res is not None:
             value = 0
