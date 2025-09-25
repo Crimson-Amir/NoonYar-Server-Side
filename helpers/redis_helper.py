@@ -611,6 +611,7 @@ async def reset_timeout_min(r, bakery_id: int) -> int:
     with SessionLocal() as db:
         res = crud.update_timeout_min(db, bakery_id, 0)
         value = None
+        print(res)
         if res is not None:
             value = 0
             pipe.set(key, value)
