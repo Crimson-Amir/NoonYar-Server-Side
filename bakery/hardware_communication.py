@@ -301,7 +301,7 @@ async def get_upcoming_customer(
         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
             r, bakery_id, customer_id, cook_time_s
         )
-        tasks.remove_customer_from_upcoming_customers.delay(bakery_id, customer_id)
+        tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
 
     return {
         "empty_upcoming": False,
