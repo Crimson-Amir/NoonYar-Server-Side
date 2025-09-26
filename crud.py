@@ -168,7 +168,6 @@ def remove_upcoming_customer(db: Session, customer_ticket_id: int, bakery_id: in
         ).first())
 
     db.delete(customer_entry)
-    db.commit()
 
 def add_upcoming_bread_to_bakery(db: Session, bakery_id: int, bread_type_id: int):
     # Ensure the bakery-bread pair exists to avoid integrity errors
