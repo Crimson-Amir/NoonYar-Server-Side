@@ -1,6 +1,7 @@
 import functools
 import crud, requests
 from celery import Celery
+from celery_logging import celery_logger
 from database import SessionLocal
 from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
 from private import SMS_KEY
@@ -16,24 +17,6 @@ celery_app = Celery(
     broker="pyamqp://guest@localhost//"
 )
 
-def log_and_report_error(context: str, error: Exception, extra: dict = None):
-    tb = traceback.format_exc()
-    error_id = uuid4().hex
-    extra = extra or {}
-    extra["error_id"] = error_id
-    logger.error(
-        context, extra={"error": str(error), "traceback": tb, **extra}
-    )
-    err_msg = (
-        f"[🔴 ERROR] {context}:"
-        f"\n\nError type: {type(error)}"
-        f"\nError reason: {str(error)}"
-        f"\n\nExtera Info:"
-        f"\n{extra}"
-    )
-    report_to_admin_api.delay(err_msg)
-
-
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def report_to_admin_api(msg, message_thread_id=ERR_THREAD_ID):
     json_data = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
@@ -42,7 +25,6 @@ def report_to_admin_api(msg, message_thread_id=ERR_THREAD_ID):
         json=json_data,
         timeout=10
     )
-
 
 def handle_task_errors(func):
     @functools.wraps(func)
@@ -53,17 +35,31 @@ def handle_task_errors(func):
         except Exception as e:
             retries = getattr(self.request, "retries", None)
             max_retries = getattr(self, "max_retries", None)
+            error_id = uuid4().hex
 
-            log_and_report_error(
-                f"Celery task: {func.__name__}",
-                e,
-                extra={
-                    "_args": args,
-                    "_kwargs": kwargs,
-                    "retries": retries,
-                    "max_retries": max_retries,
-                }
+            extra={
+                "_args": args,
+                "_kwargs": kwargs,
+                "retries": retries,
+                "max_retries": max_retries,
+                "error_id": error_id
+            }
+
+            tb = traceback.format_exc()
+
+            celery_logger.error(
+                f"Celery task: {func.__name__}", extra={"error": str(e), "traceback": tb, **extra}
             )
+            err_msg = (
+                f"[🔴 ERROR] Celery task: {func.__name__}:"
+                f"\n\nError type: {type(e)}"
+                f"\nError reason: {str(e)}"
+                f"\n\nExtera Info:"
+                f"\n{extra}"
+            )
+
+            report_to_admin_api.delay(err_msg)
+
             raise
     return wrapper
 

@@ -1,7 +1,10 @@
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import SessionLocal
-from tasks import log_and_report_error
+from tasks import report_to_admin_api
+import traceback
+from uuid import uuid4
+from logger_config import logger
 
 def get_db():
     db = SessionLocal()
@@ -9,6 +12,23 @@ def get_db():
     finally: db.close()
 
 from functools import wraps
+
+def log_and_report_error(context: str, error: Exception, extra: dict = None):
+    tb = traceback.format_exc()
+    error_id = uuid4().hex
+    extra = extra or {}
+    extra["error_id"] = error_id
+    logger.error(
+        context, extra={"error": str(error), "traceback": tb, **extra}
+    )
+    err_msg = (
+        f"[🔴 ERROR] {context}:"
+        f"\n\nError type: {type(error)}"
+        f"\nError reason: {str(error)}"
+        f"\n\nExtera Info:"
+        f"\n{extra}"
+    )
+    report_to_admin_api.delay(err_msg)
 
 def db_transaction(context: str):
     def decorator(func):
