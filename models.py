@@ -43,7 +43,7 @@ class Bakery(Base):
     active = Column(Boolean, default=True)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
     full_round_time_min = Column(Integer, nullable=False, default=10)
-    timeout_sec = Column(Integer, nullable=False, default=0)
+    timeout_sec = Column(Integer, default=0)
     bread_associations = relationship("BakeryBread", back_populates="bakery", cascade="all, delete-orphan")
     customers = relationship("Customer", back_populates="bakery")
 
