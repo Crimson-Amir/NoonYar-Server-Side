@@ -17,6 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from helpers.token_helpers import TokenBlacklist, set_cookie
 import tasks
+from fastapi.middleware.cors import CORSMiddleware
 from zoneinfo import ZoneInfo
 
 @asynccontextmanager
@@ -47,6 +48,14 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError: pass
 
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # templates = Jinja2Templates(directory="templates")
 # app.mount('/statics', StaticFiles(directory='statics'), name='static')

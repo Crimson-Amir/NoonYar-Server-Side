@@ -163,7 +163,7 @@ def remove_upcoming_customer(db: Session, customer_ticket_id: int, bakery_id: in
     customer_entry = (
         db.query(models.UpcomingCustomer)
         .filter(
-            models.UpcomingCustomer.bakery_id == bakery_id,
+            models.UpcomingCustomer.customer.bakery_id == bakery_id,
             models.UpcomingCustomer.customer.hardware_customer_id == customer_ticket_id
         ).first())
 
