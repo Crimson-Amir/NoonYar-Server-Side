@@ -297,7 +297,7 @@ async def get_upcoming_customer(
     notification_lead_time_s = cook_time_s + full_round_time_s
     is_ready = delivery_time_s <= notification_lead_time_s
 
-    if is_ready:
+    if is_ready and zmembers:
         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
             r, bakery_id, customer_id, cook_time_s
         )
