@@ -64,8 +64,8 @@ class Algorithm:
 
         # Apply global timeout (minutes) if provided via Redis
         if r is not None and bakery_id is not None:
-            timeout_min = await redis_helper.get_timeout_min(r, bakery_id)
-            base += timeout_min * 60
+            timeout_second = await redis_helper.get_timeout_second(r, bakery_id)
+            base += timeout_second
         return base
 
     @staticmethod

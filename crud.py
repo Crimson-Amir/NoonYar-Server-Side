@@ -298,16 +298,14 @@ def get_today_last_customer(db: Session, bakery_id: int):
 
     return last_customer
 
-def update_timeout_min(db: Session, bakery_id: int, delta_minutes: int) -> int | None:
-    if delta_minutes == 0:
-        minute = 0
-    else:
-        minute = models.Bakery.timeout_min + delta_minutes
+def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | None:
+    if second:
+        second = models.Bakery.timeout_min + second
 
     stmt = (
         update(models.Bakery)
         .where(models.Bakery.bakery_id == bakery_id)
-        .values(timeout_min=minute)
+        .values(timeout_second=second)
         .returning(models.Bakery.timeout_min)
     )
     result = db.execute(stmt).scalar()

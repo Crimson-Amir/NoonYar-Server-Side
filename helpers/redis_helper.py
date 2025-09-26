@@ -14,7 +14,7 @@ REDIS_KEY_UPCOMING_BREADS = f"{REDIS_KEY_PREFIX}:upcoming_breads"
 REDIS_KEY_UPCOMING_CUSTOMERS = f"{REDIS_KEY_PREFIX}:upcoming_customers"
 REDIS_KEY_CURRENT_UPCOMING_CUSTOMER = f"{REDIS_KEY_PREFIX}:current_upcoming_customer"
 REDIS_KEY_FULL_ROUND_TIME_MIN = f"{REDIS_KEY_PREFIX}:full_round_time_min"
-REDIS_KEY_TIMEOUT_MIN = f"{REDIS_KEY_PREFIX}:timeout_min"
+REDIS_KEY_TIMEOUT_SEC = f"{REDIS_KEY_PREFIX}:timeout_sec"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 def seconds_until_midnight_iran():
@@ -512,8 +512,8 @@ async def get_full_round_time_min(r, bakery_id: int, fetch_from_redis_first: boo
     return value
 
 
-async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
-    key = REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
+async def get_timeout_second(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
+    key = REDIS_KEY_TIMEOUT_SEC.format(bakery_id)
     if fetch_from_redis_first:
         val = await r.get(key)
         if val is not None:
@@ -534,13 +534,13 @@ async def get_timeout_min(r, bakery_id: int, fetch_from_redis_first: bool = True
     await pipe.execute()
     return value
 
-async def reset_timeout_min(r, bakery_id: int) -> int:
-    key = REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
+async def reset_timeout(r, bakery_id: int) -> int:
+    key = REDIS_KEY_TIMEOUT_SEC.format(bakery_id)
     pipe = r.pipeline()
     pipe.delete(key)
 
     with SessionLocal() as db:
-        res = crud.update_timeout_min(db, bakery_id, 0)
+        res = crud.update_timeout_second(db, bakery_id, 0)
         value = None
         if res is not None:
             value = 0
@@ -550,6 +550,16 @@ async def reset_timeout_min(r, bakery_id: int) -> int:
 
     await pipe.execute()
     return value
+
+
+async def update_timeout(r, bakery_id: int, new_timeout_second: int):
+    key = REDIS_KEY_TIMEOUT_SEC.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.set(key, new_timeout_second)
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+
 
 async def remove_customer_from_upcoming_customers(r, bakery_id, customer_id):
     zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
@@ -571,8 +581,8 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
     await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
-    await get_timeout_min(r, bakery_id, fetch_from_redis_first=False)
+    await get_timeout_second(r, bakery_id, fetch_from_redis_first=False)
     # TODO: REMOVE CURRENT_CUSTOMER HERE
 
 async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
-    await reset_timeout_min(r, bakery_id)
+    await reset_timeout(r, bakery_id)

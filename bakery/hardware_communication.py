@@ -219,7 +219,6 @@ async def get_upcoming_customer(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     r = request.app.state.redis
-    # TODO: REPLACE REDIS TO DATABSE
 
     cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
     zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
@@ -241,13 +240,15 @@ async def get_upcoming_customer(
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
     frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    upcoming_breads_key = redis_helper.REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
     pipe.get(frt_key)
     pipe.zrange(order_key, 0, -1)
-    time_per_bread, reservations_map, frt_min, order_ids = await pipe.execute()
+    pipe.smembers(upcoming_breads_key)
+    time_per_bread, reservations_map, frt_min, order_ids, upcoming_breads = await pipe.execute()
 
     if time_per_bread:
         time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
@@ -263,6 +264,16 @@ async def get_upcoming_customer(
     counts = [int(x) for x in reservation_str.split(',')]
     keys = [int(x) for x in order_ids]
     full_round_time_min = int(frt_min) if frt_min else 0
+
+    upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
+
+    customer_breads = dict(zip(keys, counts))
+
+    upcoming_customer_breads = {
+        bread_id: qty
+        for bread_id, qty in customer_breads.items()
+        if bread_id in upcoming_breads_set
+    }
 
     reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
 
@@ -291,11 +302,12 @@ async def get_upcoming_customer(
     return {
         "empty_upcoming": False,
         "customer_id": customer_id,
+        "breads": upcoming_customer_breads,
         "ready": is_ready
     }
 
 
-@router.post('/timeout/update')
+@router.put('/timeout/update')
 @handle_errors
 async def update_timeout(
         request: Request,
@@ -305,26 +317,19 @@ async def update_timeout(
     bakery_id = data.bakery_id
     if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
-    db = SessionLocal()
 
-    try:
-        new_timeout = crud.update_timeout_min(db, bakery_id, data.minutes)
-        if new_timeout is None:
-            raise HTTPException(status_code=404, detail='Bakery not found')
-    finally:
-        db.close()
+    with SessionLocal() as db:
+        with db.begin():
+            new_timeout = crud.update_timeout_second(db, bakery_id, data.seconds)
+            if new_timeout is None:
+                raise HTTPException(status_code=404, detail='Bakery not found')
 
     # Update Redis
     r = request.app.state.redis
-    key = redis_helper.REDIS_KEY_TIMEOUT_MIN.format(bakery_id)
-    pipe = r.pipeline()
-    pipe.set(key, new_timeout)
-    ttl = redis_helper.seconds_until_midnight_iran()
-    pipe.expire(key, ttl)
-    await pipe.execute()
+    await redis_helper.update_timeout(r, bakery_id, new_timeout)
 
     logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
-    return {"timeout_min": new_timeout}
+    return {"timeout_sec": new_timeout}
 
 @router.get('/hardware_init')
 @handle_errors

@@ -66,7 +66,4 @@ class UpcomingNotifyRequest(BakeryID):
     num_tickets: int
 
 class UpdateTimeoutRequest(BakeryID):
-    minutes: int
-
-class UpdateTimeoutRequest(BakeryID):
-    minutes: int
+    seconds: int
