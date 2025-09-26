@@ -84,6 +84,7 @@ def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirement
     finally:
         db.close()
 
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def remove_customer_from_upcoming_customers(self, customer_ticket_id, bakery_id):
     db = SessionLocal()
