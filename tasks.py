@@ -70,11 +70,13 @@ def handle_task_errors(func):
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirements):
+def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirements, customer_in_upcoming_customer=False):
     db = SessionLocal()
     try:
         c_id = crud.new_customer_no_commit(db, customer_ticket_id, bakery_id, True)
         crud.new_bread_customers(db, c_id, bread_requirements)
+        if customer_in_upcoming_customer:
+            crud.new_customer_to_upcoming_customers(db, c_id)
         db.commit()
     except Exception as e:
         db.rollback()
@@ -82,6 +84,16 @@ def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirement
     finally:
         db.close()
 
+@handle_task_errors
+def remove_customer_from_upcoming_customers(self, customer_ticket_id, bakery_id):
+    db = SessionLocal()
+    try:
+        crud.remove_upcoming_customer(db, customer_ticket_id, bakery_id)
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors

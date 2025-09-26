@@ -51,9 +51,8 @@ async def new_customer(
     customer_in_upcoming_customer = await redis_helper.maybe_add_customer_to_upcoming_zset(
         r, customer.bakery_id, customer_ticket_id, bread_requirements, upcoming_members=upcoming_set
     )
-
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer})
-    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements)
+    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer)
 
     return {
         'customer_ticket_id': customer_ticket_id,
@@ -295,6 +294,7 @@ async def get_upcoming_customer(
         pipe2 = r.pipeline()
         pipe2.setex(cur_key, cook_time_s, customer_id)
         pipe2.zrem(zkey, customer_id)
+        tasks.remove_customer_from_upcoming_customers.delay(bakery_id, customer_id)
         await pipe2.execute()
 
     return {

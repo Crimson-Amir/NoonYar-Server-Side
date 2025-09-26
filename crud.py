@@ -78,6 +78,13 @@ def new_bread_customers(db: Session, customer_id: int, bread_requirements: dict[
     ]
     db.add_all(objs)
 
+def new_customer_to_upcoming_customers(db: Session, customer_id):
+    upcoming_customer = models.UpcomingCustomer(
+        customer_id=customer_id
+    )
+    db.add(upcoming_customer)
+    return upcoming_customer
+
 def update_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
     stmt = (
         update(models.Customer)
@@ -152,6 +159,17 @@ def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: 
         return False
 
 
+def remove_upcoming_customer(db: Session, customer_ticket_id: int, bakery_id: int):
+    customer_entry = (
+        db.query(models.UpcomingCustomer)
+        .filter(
+            models.UpcomingCustomer.bakery_id == bakery_id,
+            models.UpcomingCustomer.customer.hardware_customer_id == customer_ticket_id
+        ).first())
+
+    db.delete(customer_entry)
+    db.commit()
+
 def add_upcoming_bread_to_bakery(db: Session, bakery_id: int, bread_type_id: int):
     # Ensure the bakery-bread pair exists to avoid integrity errors
     exists = (
@@ -190,6 +208,12 @@ def get_bakery_upcoming_breads(db: Session, bakery_id: int):
         .all()
     )
 
+def get_bakery_upcoming_customers(db: Session, bakery_id: int):
+    return (
+        db.query(models.UpcomingCustomer)
+        .filter(models.UpcomingCustomer.customer.bakery_id == bakery_id, models.UpcomingCustomer.is_in_queue == True)
+        .all()
+    )
 
 def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
     new_admin = models.Admin(user_id=admin.user_id, active=admin.status)

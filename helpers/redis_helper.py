@@ -390,13 +390,13 @@ async def get_bakery_upcoming_breads(r, bakery_id: int, fetch_from_redis_first: 
         bread_ids = [str(e.bread_type_id) for e in entries]
 
     pipe = r.pipeline()
+    pipe.delete(key)
+
     if bread_ids:
-        pipe.delete(key)
         pipe.sadd(key, *bread_ids)
-    else:
-        pipe.delete(key)
-    ttl = seconds_until_midnight_iran()
-    pipe.expire(key, ttl)
+        ttl = seconds_until_midnight_iran()
+        pipe.expire(key, ttl)
+
     await pipe.execute()
     return bread_ids
 
@@ -468,7 +468,7 @@ async def ensure_upcoming_customers_zset(
         r,
         bakery_id: int,
         fetch_from_redis_first: bool = True
-) -> list[int]:
+) -> list[int] | None:
     zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
 
     if fetch_from_redis_first:
@@ -477,55 +477,21 @@ async def ensure_upcoming_customers_zset(
             members = await r.zrange(zkey, 0, -1)
             return [int(x) for x in members]
 
-    # Fetch all prerequisites in a single pipeline
-    time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
-    res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
-    upcoming_key = REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
-
-    pipe0 = r.pipeline()
-    pipe0.hgetall(time_key)
-    pipe0.hgetall(res_key)
-    pipe0.smembers(upcoming_key)
-    time_per_bread, reservations, upcoming_members = await pipe0.execute()
-
-    # Fallback to DB for any missing prerequisite
-    if not time_per_bread:
-        time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
-    if not upcoming_members:
-        upcoming_members = await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
-    if not reservations:
-        rebuilt = await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
-        reservations = {str(k): ",".join(map(str, v)) for k, v in rebuilt.items()}
-
-    if not reservations:
-        await r.delete(zkey)
-        return []
-
-    bread_id_order = list(time_per_bread.keys()) if time_per_bread else []
-    upcoming_index_set = {idx for idx, bid in enumerate(bread_id_order) if bid in set(upcoming_members or [])}
-
-    # Prepare ZADD mapping for customers who have any upcoming bread count > 0
-    to_add: dict[str, int] = {}
-    for cid_str, csv in reservations.items():
-        if not csv:
-            continue
-        try:
-            counts = [int(x) for x in csv.split(",")]
-        except Exception:
-            continue
-        if any(counts[idx] > 0 for idx in upcoming_index_set):
-            to_add[cid_str] = int(cid_str)
-
     pipe = r.pipeline()
     pipe.delete(zkey)
-    if to_add:
-        pipe.zadd(zkey, to_add)
-    ttl = seconds_until_midnight_iran()
-    pipe.expire(zkey, ttl)
+
+    with SessionLocal() as db:
+        entries = crud.get_bakery_upcoming_breads(db, bakery_id)
+        res = None
+        if entries:
+            customer_ids = {str(customer.customer.hardware_customer_id): int(customer.customer.hardware_customer_id) for customer in entries}
+            pipe.zadd(zkey, customer_ids)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(zkey, ttl)
+            res = customer_ids.values()
+
     await pipe.execute()
-
-    return [int(x) for x in to_add.keys()]
-
+    return res
 
 async def maybe_add_customer_to_upcoming_zset(
         r,
@@ -536,10 +502,10 @@ async def maybe_add_customer_to_upcoming_zset(
 ) -> bool:
 
     zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
-    ukey = REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
 
     if upcoming_members is None:
         upcoming_members = await get_bakery_upcoming_breads(r, bakery_id)
+
     members = set(upcoming_members)
 
     if not members:
@@ -564,7 +530,6 @@ async def get_full_round_time_min(r, bakery_id: int, fetch_from_redis_first: boo
         if val is not None:
             return int(val)
 
-    # Delete key and fetch from DB (source of truth)
     pipe = r.pipeline()
     pipe.delete(key)
 
