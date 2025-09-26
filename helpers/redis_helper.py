@@ -431,51 +431,6 @@ async def remove_upcoming_bread_from_bakery(r, bakery_id: int, bread_id: int):
     await pipe.execute()
 
 
-async def get_upcoming_bread_counts(r, bakery_id: int, num_tickets: int) -> dict[str, int]:
-    order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-    reservations_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
-
-    pipe = r.pipeline()
-    pipe.zrange(order_key, 0, max(0, num_tickets - 1))
-    pipe.hgetall(REDIS_KEY_TIME_PER_BREAD.format(bakery_id))
-    pipe.smembers(REDIS_KEY_UPCOMING_BREADS.format(bakery_id))
-    upcoming_ids, time_per_bread_raw, upcoming_memeber = await pipe.execute()
-
-    if not upcoming_ids:
-        return {}
-
-    if not time_per_bread_raw:
-        time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
-        bread_id_order = list(time_per_bread.keys())
-    else:
-        bread_id_order = list(time_per_bread_raw.keys())
-
-    if not upcoming_memeber:
-        upcoming_memeber = await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
-        
-    upcoming_set = set(upcoming_memeber) if upcoming_memeber else set()
-    if not upcoming_set: return {}
-
-    reservations_list = await r.hmget(reservations_key, *upcoming_ids)
-
-    totals: dict[str, int] = {}
-    for reservation_str in reservations_list:
-        if not reservation_str:
-            continue
-        counts = [int(x) for x in reservation_str.split(",")]
-        for idx, count in enumerate(counts):
-            if idx >= len(bread_id_order):
-                break
-            bread_id_str = bread_id_order[idx]
-            if bread_id_str in upcoming_set and count:
-                totals[bread_id_str] = totals.get(bread_id_str, 0) + count
-    
-    for bread_id in upcoming_set:
-        totals.setdefault(bread_id, 0)
-
-    return totals
-
-
 async def ensure_upcoming_customers_zset(
         r,
         bakery_id: int,
