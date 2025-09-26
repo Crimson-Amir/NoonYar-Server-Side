@@ -268,7 +268,7 @@ async def get_upcoming_customer(
     upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
 
     customer_breads = dict(zip(keys, counts))
-
+    print(customer_breads, upcoming_breads_set)
     upcoming_customer_breads = {
         bread_id: qty
         for bread_id, qty in customer_breads.items()
