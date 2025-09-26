@@ -268,7 +268,7 @@ async def get_upcoming_customer(
     upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
 
     customer_breads = dict(zip(time_per_bread.keys(), counts))
-    print(customer_breads, upcoming_breads_set)
+
     upcoming_customer_breads = {
         bread_id: qty
         for bread_id, qty in customer_breads.items()
@@ -293,7 +293,7 @@ async def get_upcoming_customer(
     notification_lead_time_s = cook_time_s + full_round_time_s
     is_ready = delivery_time_s <= notification_lead_time_s
 
-    if is_ready and zmembers:
+    if is_ready and cur_val is None:
         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
             r, bakery_id, customer_id, cook_time_s
         )
