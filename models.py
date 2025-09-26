@@ -97,6 +97,7 @@ class Customer(Base):
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
     skipped_associations = relationship("SkippedCustomer", back_populates="customer", cascade="all, delete-orphan")
+    upcoming_associations = relationship("UpcomingCustomer", back_populates="customer", cascade="all, delete-orphan")
     bakery = relationship("Bakery", back_populates="customers")
 
 
@@ -129,6 +130,11 @@ class SkippedCustomer(Base):
 
     customer = relationship("Customer", back_populates="skipped_associations")
 
+class UpcomingCustomer(Base):
+    __tablename__ = 'upcoming_customer'
+
+    customer_id = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), primary_key=True)
+    customer = relationship("Customer", back_populates="upcoming_associations")
 
 # class OTP(Base):
 #     __tablename__ = 'otp_table'

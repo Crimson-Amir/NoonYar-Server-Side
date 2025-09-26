@@ -227,19 +227,23 @@ async def get_upcoming_customer(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     r = request.app.state.redis
+    # TODO: REPLACE REDIS TO DATABSE
 
     cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
-    customer_id = await r.get(cur_key)
-
     zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
 
-    if customer_id:
-        customer_id = int(customer_id)
+    # Fetch both in one roundtrip
+    pipe = r.pipeline()
+    pipe.get(cur_key)
+    pipe.zrange(zkey, 0, 0)
+    cur_val, zmembers = await pipe.execute()
+
+    if cur_val:
+        customer_id = int(cur_val)
+    elif zmembers:
+        customer_id = int(zmembers[0])
     else:
-        members = await r.zrange(zkey, 0, 0)
-        if not members:
-            return {"empty_upcoming": True}
-        customer_id = int(members[0])
+        return {"empty_upcoming": True}
 
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
@@ -283,9 +287,7 @@ async def get_upcoming_customer(
     cook_time_s = alg.compute_bread_time(time_per_bread_list, counts)
 
     full_round_time_s = full_round_time_min * 60
-
     notification_lead_time_s = cook_time_s + full_round_time_s
-    
     is_ready = delivery_time_s <= notification_lead_time_s
 
     if is_ready:
@@ -298,11 +300,6 @@ async def get_upcoming_customer(
     return {
         "empty_upcoming": False,
         "customer_id": customer_id,
-        "in_queue_time_s": in_queue_time,
-        "empty_slot_time_s": empty_slot_time,
-        "delivery_time_s": delivery_time_s,
-        "cook_time_s": cook_time_s,
-        "notification_lead_time_s": notification_lead_time_s,
         "ready": is_ready
     }
 
