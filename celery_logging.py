@@ -7,7 +7,7 @@ def setup_celery_logger():
     logger.setLevel(logging.INFO)
 
     # Direct file handler (no queue needed for Celery)
-    file_handler = logging.FileHandler("celery.log")
+    file_handler = logging.FileHandler("app.log")
     formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(message)s")
     file_handler.setFormatter(formatter)
 
