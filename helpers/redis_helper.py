@@ -526,7 +526,7 @@ async def get_timeout_second(r, bakery_id: int, fetch_from_redis_first: bool = T
         bakery = crud.get_bakery(db, bakery_id)
         value = None
         if bakery:
-            value = bakery.timeout_min
+            value = bakery.timeout_sec
             pipe.set(key, value)
             ttl = seconds_until_midnight_iran()
             pipe.expire(key, ttl)
