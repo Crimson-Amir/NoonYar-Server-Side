@@ -265,14 +265,14 @@ async def get_upcoming_customer(
     keys = [int(x) for x in order_ids]
     full_round_time_min = int(frt_min) if frt_min else 0
 
-    # upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
+    upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
 
     customer_breads = dict(zip(time_per_bread.keys(), counts))
-    print(customer_breads, upcoming_breads)
+    print(customer_breads, upcoming_breads_set)
     upcoming_customer_breads = {
         bread_id: qty
         for bread_id, qty in customer_breads.items()
-        if bread_id in upcoming_breads
+        if bread_id in upcoming_breads_set
     }
 
     reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
