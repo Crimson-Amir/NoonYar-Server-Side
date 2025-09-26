@@ -76,7 +76,7 @@ async def next_ticket(
     r = request.app.state.redis
     is_custome_skipped = False
 
-    current_ticket_id, time_per_bread, customer_reservation, skipped_customer_reservations, remove_skipped_customer = await redis_helper.get_customer_ticket_data_and_remove_skipped_ticket_pipe(r, bakery_id, customer_id)
+    current_ticket_id, time_per_bread, customer_reservation, skipped_customer_reservations, remove_skipped_customer, upcoming_breads = await redis_helper.get_customer_ticket_data_and_remove_skipped_ticket_pipe(r, bakery_id, customer_id)
 
     if not current_ticket_id:
         reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
@@ -93,6 +93,10 @@ async def next_ticket(
         await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
         await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
         tasks.next_ticket_process.delay(customer_id, bakery_id)
+        # TODO: IF YOU WANT REMOVE FROM TIHS LIST EVEN FOR SKIP TICKET, MOVE THIS SECTION DOWN
+        if any(bread in time_per_bread.keys() for bread in upcoming_breads):
+            await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
+            tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
 
     time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
@@ -164,9 +168,8 @@ async def skip_ticket(
         if not status: raise HTTPException(status_code=401, detail="invalid customer_id")
 
     await redis_helper.add_customer_to_skipped_customers(r, bakery_id, customer_id, reservations_str=customer_reservation)
-    await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
 
-    next_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
+    next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(r, bakery_id)
     next_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, next_ticket_id, return_error=False)
     next_user_detail = {}
     if next_ticket_id:
@@ -175,6 +178,11 @@ async def skip_ticket(
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
     tasks.skip_customer.delay(customer_id, bakery_id)
+
+    if any(bread in time_per_bread.keys() for bread in upcoming_breads):
+        await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
+        tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
+
     logger.info(f"{FILE_NAME}:skip_ticket", extra={"bakery_id": bakery_id, "customer_id": customer_id})
     return {
         "next_ticket_id": next_ticket_id,
@@ -290,12 +298,10 @@ async def get_upcoming_customer(
     is_ready = delivery_time_s <= notification_lead_time_s
 
     if is_ready:
-        cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
-        pipe2 = r.pipeline()
-        pipe2.setex(cur_key, cook_time_s, customer_id)
-        pipe2.zrem(zkey, customer_id)
+        await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
+            r, bakery_id, customer_id, cook_time_s
+        )
         tasks.remove_customer_from_upcoming_customers.delay(bakery_id, customer_id)
-        await pipe2.execute()
 
     return {
         "empty_upcoming": False,

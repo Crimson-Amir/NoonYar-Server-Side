@@ -102,7 +102,6 @@ def next_ticket_process(self, hardware_customer_id, bakery_id):
     db = SessionLocal()
     try:
         crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
-        crud.remove_upcoming_customer(db, hardware_customer_id, bakery_id)
         db.commit()
     except Exception as e:
         db.rollback()

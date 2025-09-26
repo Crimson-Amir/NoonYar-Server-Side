@@ -78,17 +78,29 @@ async def get_customer_ticket_data_pipe_without_reservations(r, bakery_id):
     pipe1.hgetall(time_key)
     return await pipe1.execute()
 
+async def get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(r, bakery_id):
+    time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    upcoming_key = REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
+    pipe1 = r.pipeline()
+    pipe1.zrange(order_key, 0, 0)
+    pipe1.hgetall(time_key)
+    pipe1.smembers(upcoming_key)
+    return await pipe1.execute()
+
 async def get_customer_ticket_data_and_remove_skipped_ticket_pipe(r, bakery_id, customer_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
     skipped_key = REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id)
+    upcomming_bread_key = REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
     pipe1 = r.pipeline()
     pipe1.zrange(order_key, 0, 0)
     pipe1.hgetall(time_key)
     pipe1.hget(res_key, str(customer_id))
     pipe1.hget(skipped_key, str(customer_id))
     pipe1.hdel(skipped_key, str(customer_id))
+    pipe1.smembers(upcomming_bread_key)
     return await pipe1.execute()
 
 async def check_current_ticket_id(r, bakery_id, current_ticket_id: list, return_error=True):
@@ -583,7 +595,18 @@ async def reset_timeout_min(r, bakery_id: int) -> int:
 
     await pipe.execute()
     return value
-   
+
+async def remove_customer_from_upcoming_customers(r, bakery_id, customer_id):
+    zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
+    await r.zrem(zkey, customer_id)
+
+async def remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(r, bakery_id, customer_id, cook_time_s):
+    cur_key = REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
+    zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.setex(cur_key, cook_time_s, customer_id)
+    pipe.zrem(zkey, customer_id)
+    await pipe.execute()
 
 async def initialize_redis_sets(r, bakery_id: int):
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
