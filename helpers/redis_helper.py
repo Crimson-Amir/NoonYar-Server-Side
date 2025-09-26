@@ -481,7 +481,7 @@ async def ensure_upcoming_customers_zset(
     pipe.delete(zkey)
 
     with SessionLocal() as db:
-        entries = crud.get_bakery_upcoming_breads(db, bakery_id)
+        entries = crud.get_bakery_upcoming_customers(db, bakery_id)
         res = None
         if entries:
             customer_ids = {str(customer.customer.hardware_customer_id): int(customer.customer.hardware_customer_id) for customer in entries}
