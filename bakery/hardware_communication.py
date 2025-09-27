@@ -267,13 +267,6 @@ async def get_upcoming_customer(
 
     upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
 
-    customer_breads = dict(zip(time_per_bread.keys(), counts))
-
-    upcoming_customer_breads = {
-        bread_id: qty
-        for bread_id, qty in customer_breads.items()
-        if bread_id in upcoming_breads_set
-    }
 
     reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
 
@@ -293,19 +286,28 @@ async def get_upcoming_customer(
     notification_lead_time_s = cook_time_s + full_round_time_s
     is_ready = delivery_time_s <= notification_lead_time_s
 
+    response = {
+        "empty_upcoming": False,
+        "ready": False
+    }
+
     if is_ready and cur_val is None:
+        customer_breads = dict(zip(time_per_bread.keys(), counts))
+        upcoming_customer_breads = {
+            bread_id: qty
+            for bread_id, qty in customer_breads.items()
+            if bread_id in upcoming_breads_set
+        }
+        response['customer_id'] = customer_id
+        response["breads"] = upcoming_customer_breads
+        response['ready'] = True
+
         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
             r, bakery_id, customer_id, cook_time_s
         )
         tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
 
-    return {
-        "empty_upcoming": False,
-        "customer_id": customer_id,
-        "breads": upcoming_customer_breads,
-        "ready": is_ready
-    }
-
+    return response
 
 @router.put('/timeout/update')
 @handle_errors
