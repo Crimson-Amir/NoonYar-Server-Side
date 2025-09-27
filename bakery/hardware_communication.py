@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
+
+import mqtt_client
 from helpers import token_helpers, redis_helper, endpoint_helper
 import schemas, tasks, algorithm, crud
 from logger_config import logger
 from database import SessionLocal
+from mqtt_client import mqtt_handler
 
 FILE_NAME = "bakery:hardware_communication"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
@@ -47,10 +50,14 @@ async def new_customer(
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
-    # Add to upcoming customers ZSET if applicable
     customer_in_upcoming_customer = await redis_helper.maybe_add_customer_to_upcoming_zset(
         r, customer.bakery_id, customer_ticket_id, bread_requirements, upcoming_members=upcoming_set
     )
+
+    if customer_in_upcoming_customer:
+        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id)
+    await mqtt_client.update_has_customer_in_queue(request, bakery_id)
+
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer)
 
@@ -130,7 +137,8 @@ async def current_ticket(
     if not current_ticket_id:
         reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
         if not reservation_list:
-            endpoint_helper.raise_empty_queue_exception()
+            await mqtt_client.update_has_customer_in_queue(request, bakery_id, False)
+            return {"has_customer_in_queue": False}
         current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
 
     current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
@@ -138,6 +146,7 @@ async def current_ticket(
     time_per_bread, customer_reservations = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservations)
     return {
+        "has_customer_in_queue": True,
         "current_ticket_id": current_ticket_id,
         "current_user_detail": current_user_detail
     }
@@ -234,6 +243,7 @@ async def get_upcoming_customer(
     elif zmembers:
         customer_id = int(zmembers[0])
     else:
+        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
         return {"empty_upcoming": True}
 
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -254,11 +264,13 @@ async def get_upcoming_customer(
         time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
 
     if not time_per_bread or not order_ids:
+        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
         return {"empty_upcoming": True}
 
     reservation_str = reservations_map.get(str(customer_id)) if reservations_map else None
 
     if not reservation_str:
+        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
         return {"empty_upcoming": True}
     
     counts = [int(x) for x in reservation_str.split(',')]
@@ -301,6 +313,7 @@ async def get_upcoming_customer(
         response['customer_id'] = customer_id
         response["breads"] = upcoming_customer_breads
         response['ready'] = True
+        response['cook_time_s'] = cook_time_s
 
         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
             r, bakery_id, customer_id, cook_time_s
@@ -332,6 +345,7 @@ async def update_timeout(
 
     logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
     return {"timeout_sec": new_timeout}
+
 
 @router.get('/hardware_init')
 @handle_errors

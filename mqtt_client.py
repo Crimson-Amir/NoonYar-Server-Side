@@ -6,6 +6,8 @@ from private import HARDWARE_CLIENT_ERROR_THREAD_ID
 
 MQTT_BAKERY_PREFIX = "bakery/{0}"
 MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
+MQTT_UPDATE_HAS_CUSTOMER_IN_QUEUE = f"{MQTT_BAKERY_PREFIX}/has_customer_in_queue_update"
+MQTT_UPDATE_HAS_UPCOMING_CUSTOMER_IN_QUEUE = f"{MQTT_BAKERY_PREFIX}/has_upcoming_customer_in_queue_update"
 
 async def mqtt_handler(app):
     client = app.state.mqtt_client
@@ -30,4 +32,14 @@ async def mqtt_handler(app):
 async def update_time_per_bread(request, bakery_id, new_config):
     key = MQTT_UPDATE_BREAD_TIME.format(bakery_id)
     mqqt_payload = json.dumps(new_config)
+    await request.app.state.mqtt_client.publish(key, mqqt_payload, qos=1)
+
+async def update_has_customer_in_queue(request, bakery_id, state=True):
+    key = MQTT_UPDATE_HAS_CUSTOMER_IN_QUEUE.format(bakery_id)
+    mqqt_payload = json.dumps({"state": state})
+    await request.app.state.mqtt_client.publish(key, mqqt_payload, qos=1)
+
+async def update_has_upcoming_customer_in_queue(request, bakery_id, state=True):
+    key = MQTT_UPDATE_HAS_UPCOMING_CUSTOMER_IN_QUEUE.format(bakery_id)
+    mqqt_payload = json.dumps({"state": state})
     await request.app.state.mqtt_client.publish(key, mqqt_payload, qos=1)
