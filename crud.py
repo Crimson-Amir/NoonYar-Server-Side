@@ -300,13 +300,13 @@ def get_today_last_customer(db: Session, bakery_id: int):
 
 def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | None:
     if second:
-        second = models.Bakery.timeout_min + second
+        second = models.Bakery.timeout_sec + second
 
     stmt = (
         update(models.Bakery)
         .where(models.Bakery.bakery_id == bakery_id)
         .values(timeout_second=second)
-        .returning(models.Bakery.timeout_min)
+        .returning(models.Bakery.timeout_sec)
     )
     result = db.execute(stmt).scalar()
     db.commit()
