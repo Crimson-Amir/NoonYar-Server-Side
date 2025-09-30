@@ -53,6 +53,7 @@ class OTPStore:
     def set_otp(self, phone_number: str, otp: int, ttl: int = 300):
         hashed = hash_otp(otp)
         self.r.set(f"otp:{phone_number}", hashed, ex=ttl)
+        self.r.set(f"otp_debug:{phone_number}", otp, ex=ttl)
 
     async def verify_otp(self, phone_number: str, otp: int) -> bool:
         key = f"otp:{phone_number}"
