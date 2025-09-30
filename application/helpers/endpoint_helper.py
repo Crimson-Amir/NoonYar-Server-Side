@@ -1,10 +1,10 @@
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
-from database import SessionLocal
-from tasks import report_to_admin_api
+from application.database import SessionLocal
+from application.tasks import report_to_admin_api
 import traceback
 from uuid import uuid4
-from logger_config import logger
+from application.logger_config import logger
 
 def get_db():
     db = SessionLocal()

@@ -1,10 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-import crud
-from logger_config import logger
-import schemas
+from application.logger_config import logger
 from sqlalchemy.orm import Session
-from helpers import endpoint_helper, redis_helper, database_helper
-import mqtt_client
+from application.helpers import database_helper, endpoint_helper, redis_helper
+from application import mqtt_client, crud, schemas
 from sqlalchemy.exc import IntegrityError
 
 FILE_NAME = "bakery:management"

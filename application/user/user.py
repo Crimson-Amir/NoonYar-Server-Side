@@ -1,10 +1,10 @@
 from fastapi import APIRouter
 from fastapi import Request
 from fastapi.responses import RedirectResponse
-from helpers import redis_helper, endpoint_helper
-from algorithm import Algorithm
-from private import SECRET_KEY
-import jwt, algorithm
+from application.helpers import endpoint_helper, redis_helper
+from application.algorithm import Algorithm
+from application.setting import settings
+import jwt
 
 router = APIRouter(
     prefix='',
@@ -17,7 +17,7 @@ handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 async def decode_access_token(request):
     data = request.cookies.get('access_token')
     if not data: return
-    decode_data = jwt.decode(data, SECRET_KEY, algorithms=["HS256"])
+    decode_data = jwt.decode(data, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
     return decode_data
 
 @router.get('/')

@@ -1,9 +1,9 @@
 import hashlib, datetime
-import crud
-from database import SessionLocal
+from application import crud
+from application.database import SessionLocal
 import logging
 
-logging.getLogger("app")
+logging.getLogger("application")
 bakery_token = {}
 
 def hash_otp(code: int) -> str:
@@ -53,6 +53,7 @@ class OTPStore:
     def set_otp(self, phone_number: str, otp: int, ttl: int = 300):
         hashed = hash_otp(otp)
         self.r.set(f"otp:{phone_number}", hashed, ex=ttl)
+        # TODO: REMOVE THIS IN PRODUCTION
         self.r.set(f"otp_debug:{phone_number}", otp, ex=ttl)
 
     async def verify_otp(self, phone_number: str, otp: int) -> bool:

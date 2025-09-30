@@ -3,25 +3,23 @@ import crud, requests
 from celery import Celery
 from celery_logging import celery_logger
 from database import SessionLocal
-from private import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, ERR_THREAD_ID
-from private import SMS_KEY
+from setting import settings
 import traceback, redis
 from uuid import uuid4
-from logger_config import logger
 from helpers import token_helpers, redis_helper
 from redis import asyncio as aioredis
 import asyncio
 
 celery_app = Celery(
     "tasks",
-    broker="pyamqp://guest@localhost//"
+    broker=settings.CELERY_BROKER_URL
 )
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def report_to_admin_api(msg, message_thread_id=ERR_THREAD_ID):
-    json_data = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
+def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID):
+    json_data = {'chat_id': settings.TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
     requests.post(
-        url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
         json=json_data,
         timeout=10
     )
@@ -150,14 +148,12 @@ def send_otp(self, mobile_number, code, expire_m=10):
         }
         headers = {
             "ACCEPT": "application/json",
-            "X-API-KEY": SMS_KEY
+            "X-API-KEY": settings.SMS_KEY
         }
         response = requests.post(url, json=data, headers=headers, timeout=10)
         if response.status_code == 200:
-            r = redis.Redis(
-                host="localhost",
-                port=6379,
-                password="amir1383amir",  # ← add this
+            r = redis.from_url(
+                settings.REDIS_URL,
                 decode_responses=True
             )
             try:
@@ -189,10 +185,8 @@ def initialize_bakeries_redis_sets(self, mid_night):
 @handle_task_errors
 def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
     async def _task():
-        r = aioredis.Redis(
-            host="localhost",
-            port=6379,
-            password="amir1383amir",
+        r = aioredis.from_url(
+            settings.REDIS_URL,
             decode_responses=True
         )
         try:

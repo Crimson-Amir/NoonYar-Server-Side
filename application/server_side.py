@@ -1,12 +1,10 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import jwt, asyncio
 from logger_config import listener
 from auth import create_access_token
 import aiomqtt
-from private import REFRESH_SECRET_KEY, SECRET_KEY, ACCESS_TOKEN_EXP_MIN, ALGORITHM, MQTT_BROKER_HOST, MQTT_BROKER_PORT
+from setting import settings
 from user import authentication, user
 from bakery import hardware_communication, management
 from admin import manage
@@ -22,12 +20,9 @@ from zoneinfo import ZoneInfo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.redis = redis.from_url(
-        "redis://:amir1383amir@localhost:6379",
-        decode_responses=True
-    )
+    app.state.redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
     listener.start()
-    app.state.mqtt_client = aiomqtt.Client(hostname=MQTT_BROKER_HOST, port=MQTT_BROKER_PORT)
+    app.state.mqtt_client = aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
     tasks.initialize_bakeries_redis_sets.delay(mid_night=False)
@@ -58,7 +53,7 @@ app.add_middleware(
 )
 
 # templates = Jinja2Templates(directory="templates")
-# app.mount('/statics', StaticFiles(directory='statics'), name='static')
+# application.mount('/statics', StaticFiles(directory='statics'), name='static')
 
 app.include_router(authentication.router)
 app.include_router(user.router)
@@ -84,7 +79,7 @@ async def authenticate_request(request: Request, call_next):
         try:
             if await blacklist.is_blacklisted(access_token):
                 return JSONResponse(status_code=403, content={"detail": "Access token blacklisted"})
-            payload = jwt.decode(access_token, SECRET_KEY, algorithms=ALGORITHM)
+            payload = jwt.decode(access_token, settings.SECRET_KEY, algorithms=settings.ALGORITHM)
             request.state.user = payload
             return await call_next(request)
         except jwt.ExpiredSignatureError:
@@ -96,15 +91,15 @@ async def authenticate_request(request: Request, call_next):
         try:
             if await blacklist.is_blacklisted(refresh_token):
                 return JSONResponse(status_code=403, content={"detail": "Refresh token blacklisted"})
-            refresh_payload = jwt.decode(refresh_token, REFRESH_SECRET_KEY, algorithms=ALGORITHM)
+            refresh_payload = jwt.decode(refresh_token, settings.REFRESH_SECRET_KEY, algorithms=settings.ALGORITHM)
             new_token = create_access_token({
                 "user_id": refresh_payload["user_id"],
                 "first_name": refresh_payload["first_name"]
             })
 
-            request.state.user = jwt.decode(new_token, SECRET_KEY, algorithms=["HS256"])
+            request.state.user = jwt.decode(new_token, settings.SECRET_KEY, algorithms=["HS256"])
             response = await call_next(request)
-            set_cookie(response, "access_token", new_token, ACCESS_TOKEN_EXP_MIN * 60)
+            set_cookie(response, "access_token", new_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
             return response
         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
             return JSONResponse(status_code=401, content={"detail": "Invalid or expierd refresh token"})

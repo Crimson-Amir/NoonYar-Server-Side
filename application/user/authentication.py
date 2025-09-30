@@ -1,13 +1,14 @@
 from fastapi import Request, Depends, Response, APIRouter, HTTPException, Cookie
 from fastapi.responses import RedirectResponse
-import schemas, crud, tasks, private
+from application import tasks, crud, schemas
+from application.setting import settings
 from sqlalchemy.orm import Session
-from auth import create_access_token, create_refresh_token, hash_password_md5, decode_token
-from database import SessionLocal
+from application.auth import create_access_token, create_refresh_token, decode_token
+from application.database import SessionLocal
 from datetime import timedelta
-from logger_config import logger
+from application.logger_config import logger
 import random, time
-from helpers import token_helpers, endpoint_helper
+from application.helpers import endpoint_helper, token_helpers
 
 FILE_NAME = "user:authentication.py"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
@@ -51,8 +52,8 @@ async def create_user(user: schemas.SignUpRequirement, request: Request, respons
     access_token = create_access_token(data=user_data)
     cr_refresh_token = create_refresh_token(data=user_data)
 
-    token_helpers.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
-    token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
+    token_helpers.set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
+    token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
 
     response.delete_cookie("temporary_sign_up_token")
 
@@ -69,7 +70,7 @@ async def create_user(user: schemas.SignUpRequirement, request: Request, respons
     for key, value in extra.items():
         msg += f"\n{key}: {value}"
 
-    tasks.report_to_admin_api.delay(msg, message_thread_id=private.NEW_USER_THREAD_ID)
+    tasks.report_to_admin_api.delay(msg, message_thread_id=settings.NEW_USER_THREAD_ID)
 
     return {'msg': 'user created', 'user_id': create_user_db.user_id}
 
@@ -100,9 +101,9 @@ async def verify_otp(request: Request, response: Response, data: schemas.VerifyO
     if not db_user:
         token = create_access_token(
             data={"phone_number": data.phone_number, "purpose": "signup"},
-            expires_delta=timedelta(minutes=private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
+            expires_delta=timedelta(minutes=settings.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
         )
-        token_helpers.set_cookie(response, "temporary_sign_up_token", token, private.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
+        token_helpers.set_cookie(response, "temporary_sign_up_token", token, settings.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
         step = 'sign-up'
     else:
         user_data = {
@@ -111,8 +112,8 @@ async def verify_otp(request: Request, response: Response, data: schemas.VerifyO
         }
         access_token = create_access_token(data=user_data)
         cr_refresh_token = create_refresh_token(data=user_data)
-        token_helpers.set_cookie(response, "access_token", access_token, private.ACCESS_TOKEN_EXP_MIN * 60)
-        token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, private.REFRESH_TOKEN_EXP_MIN * 60)
+        token_helpers.set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
+        token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
         step = 'login'
 
     logger.info(f"{FILE_NAME}:verify_otp:{step}", extra={"phone_number": data.phone_number, "code": data.code})
@@ -135,15 +136,15 @@ async def logout(request: Request):
     if access_token:
         payload = decode_token(access_token)
         exp = payload.get("exp")
-        ttl = max(1, exp - int(time.time())) if exp else private.ACCESS_TOKEN_EXP_MIN * 60
+        ttl = max(1, exp - int(time.time())) if exp else settings.ACCESS_TOKEN_EXP_MIN * 60
         await blacklist.add(access_token, ttl)
 
     # Refresh token
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
-        payload = decode_token(refresh_token, private.REFRESH_SECRET_KEY)
+        payload = decode_token(refresh_token, settings.REFRESH_SECRET_KEY)
         exp = payload.get("exp")
-        ttl = max(1, exp - int(time.time())) if exp else private.REFRESH_TOKEN_EXP_MIN * 60
+        ttl = max(1, exp - int(time.time())) if exp else settings.REFRESH_TOKEN_EXP_MIN * 60
         await blacklist.add(refresh_token, ttl)
 
     # Clear cookies

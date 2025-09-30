@@ -1,8 +1,38 @@
-.idea/
 .venv/
-__pycache__/
-alembic.ini
-app.log
-alembic/
-private.py
+app/app.log
 venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pycache/
+*.pytest_cache/
+*.mypy_cache/
+*.coverage
+*.egg-info/
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.*        # any other env variants (like .env.test, .env.prod)
+secrets.json  # if you have any JSON secrets
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.log
+docker-compose.override.yml
+**/tmp/
+**/node_modules/   # if frontend exists
+*.pid
+*.sock
+
+alembic/versions/*.pyc
+alembic/versions/*.py

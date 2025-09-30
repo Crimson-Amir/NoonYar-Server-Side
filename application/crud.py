@@ -14,7 +14,8 @@ def is_user_admin(db: Session, user_id: str):
     return db.query(models.Admin).filter_by(user_id=user_id, active=True).first()
 
 def get_bakery_breads(db: Session, bakery_id: int):
-    return db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).order_by(asc(models.BakeryBread.bread_type_id)).all()
+    return db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).order_by(asc(
+        models.BakeryBread.bread_type_id)).all()
 
 def get_bakery(db: Session, bakery_id: int):
     return db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()

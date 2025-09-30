@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-import crud
-import schemas, tasks
+from application import crud, schemas
 from sqlalchemy.orm import Session
-from database import SessionLocal
+from application.database import SessionLocal
 
 router = APIRouter(
     prefix='/admin',

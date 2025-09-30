@@ -12,6 +12,6 @@ file_handler.setFormatter(formatter)
 
 listener = logging.handlers.QueueListener(log_queue, file_handler)
 
-logger = logging.getLogger("app")
+logger = logging.getLogger("application")
 logger.addHandler(queue_handler)   # log events go into queue
 logger.setLevel(logging.INFO)

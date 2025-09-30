@@ -1,6 +1,6 @@
 from fastapi import HTTPException
-import crud, private
-from database import SessionLocal
+from application import crud
+from application.database import SessionLocal
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 

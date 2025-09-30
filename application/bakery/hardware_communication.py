@@ -1,11 +1,9 @@
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
 
-import mqtt_client
-from helpers import token_helpers, redis_helper, endpoint_helper
-import schemas, tasks, algorithm, crud
-from logger_config import logger
-from database import SessionLocal
-from mqtt_client import mqtt_handler
+from application.helpers import endpoint_helper, redis_helper, token_helpers
+from application import tasks, algorithm, mqtt_client, crud, schemas
+from application.logger_config import logger
+from application.database import SessionLocal
 
 FILE_NAME = "bakery:hardware_communication"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)

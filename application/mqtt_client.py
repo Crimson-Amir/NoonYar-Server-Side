@@ -2,7 +2,7 @@ import json
 import asyncio
 from tasks import report_to_admin_api
 from helpers import endpoint_helper
-from private import HARDWARE_CLIENT_ERROR_THREAD_ID
+from setting import settings
 
 MQTT_BAKERY_PREFIX = "bakery/{0}"
 MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
@@ -23,7 +23,7 @@ async def mqtt_handler(app):
                     text = (f"[🔴 MQTT ERROR]:"
                             f"\n\nBakeryID: {bakery_id}"
                             f"\nPayload: {payload}")
-                    report_to_admin_api.delay(text, message_thread_id=HARDWARE_CLIENT_ERROR_THREAD_ID)
+                    report_to_admin_api.delay(text, message_thread_id=settings.HARDWARE_CLIENT_ERROR_THREAD_ID)
 
         except Exception as e:
             endpoint_helper.log_and_report_error('mqtt_client:mqtt_handler', e)

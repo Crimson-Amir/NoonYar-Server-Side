@@ -3,7 +3,7 @@ from pythonjsonlogger import jsonlogger
 
 
 def setup_celery_logger():
-    logger = logging.getLogger("app")  # same name as FastAPI logger
+    logger = logging.getLogger("application")  # same name as FastAPI logger
     logger.setLevel(logging.INFO)
 
     # Direct file handler (no queue needed for Celery)
