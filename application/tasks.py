@@ -12,7 +12,8 @@ import asyncio
 
 celery_app = Celery(
     "tasks",
-    broker=settings.CELERY_BROKER_URL
+    broker=settings.CELERY_BROKER_URL,
+    backend=None
 )
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})

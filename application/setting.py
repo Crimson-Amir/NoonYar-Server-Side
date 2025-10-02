@@ -31,7 +31,6 @@ class Settings(BaseSettings):
 
     # Celery
     CELERY_BROKER_URL: str
-    CELERY_RESULT_BACKEND: str
 
     class Config:
         env_file = "../.env"  # only needed for local/dev; ignored in Docker if env vars already set

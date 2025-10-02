@@ -25,7 +25,20 @@ async def lifespan(app: FastAPI):
     app.state.mqtt_client = aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
-    tasks.initialize_bakeries_redis_sets.delay(mid_night=False)
+    async def send_task_with_retry():
+        max_attempts = 10
+        delay = 2
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                tasks.initialize_bakeries_redis_sets.delay(mid_night=False)
+                break
+            except Exception as e:
+                if attempt < max_attempts:
+                    print(f"✗ Failed to send task (attempt {attempt}/{max_attempts}): {e}")
+                    await asyncio.sleep(delay)
+
+    asyncio.create_task(send_task_with_retry())
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Tehran"))
     scheduler.add_job(
         tasks.initialize_bakeries_redis_sets.delay,
