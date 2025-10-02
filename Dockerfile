@@ -14,4 +14,4 @@ COPY alembic ./alembic
 EXPOSE 80
 
 # Command to run FastAPI
-CMD ["uvicorn", "application.main:app", "--host", "0.0.0.0", "--port", "80"]
+CMD ["uvicorn", "application.server_side:app", "--host", "0.0.0.0", "--port", "80"]

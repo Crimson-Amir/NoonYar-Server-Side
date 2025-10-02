@@ -13,7 +13,7 @@ services:
 
   worker:
     build: .
-    command: celery -A application.tasks worker --loglevel=info
+    command: celery -A tasks worker --loglevel=info --pool=threads --concurrency=4
     env_file: .env
     depends_on:
       - db
@@ -24,7 +24,7 @@ services:
     image: postgres:15
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: amir1383amir
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: noon_yar
     ports:
       - "5432:5432"
