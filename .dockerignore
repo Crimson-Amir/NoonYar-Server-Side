@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+application/venv/
+*.pyc
+.python-version
+
+.env*
+!.env.example
+
+.git/
+.gitignore
+
+.idea/
+
+.DS_Store
+Thumbs.db
