@@ -306,7 +306,7 @@ def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | Non
     stmt = (
         update(models.Bakery)
         .where(models.Bakery.bakery_id == bakery_id)
-        .values(timeout_second=second)
+        .values(timeout_sec=second)
         .returning(models.Bakery.timeout_sec)
     )
     result = db.execute(stmt).scalar()
