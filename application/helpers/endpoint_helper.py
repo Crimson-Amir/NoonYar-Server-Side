@@ -33,7 +33,7 @@ def log_and_report_error(context: str, error: Exception, extra: dict = None):
 def db_transaction(context: str):
     def decorator(func):
         @wraps(func)
-        async def wrapper(*args, db: Session = Depends(get_db), **kwargs):
+        async def wrapper(*args, db, **kwargs):
             try:
                 return await func(*args, db=db, **kwargs)
             except HTTPException as e:

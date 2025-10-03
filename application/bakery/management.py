@@ -130,12 +130,12 @@ async def add_notify_bakery_bread(
     r = request.app.state.redis
     try:
         entry = crud.add_upcoming_bread_to_bakery(db, data.bakery_id, data.bread_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail='Bread does not exist in bakery-bread table')
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=409, detail='Bread-notify already exists')
-    except database_helper.BreadDoesNotExist as e:
-        db.rollback()
-        raise HTTPException(status_code=404, detail=str(e))
+
     logger.info(f"{FILE_NAME}:add_upcoming_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
     await redis_helper.add_upcoming_bread_to_bakery(r, data.bakery_id, data.bread_id)
     return {'status': 'successfully added'}

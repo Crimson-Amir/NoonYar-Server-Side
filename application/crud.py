@@ -183,8 +183,8 @@ def add_upcoming_bread_to_bakery(db: Session, bakery_id: int, bread_type_id: int
             models.BakeryBread.bread_type_id == bread_type_id
         ).first()
     )
-    if not exists:
-        raise database_helper.BreadDoesNotExist()
+
+    if not exists: return
 
     entry = models.BakeryUpcomingBread(bakery_id=bakery_id, bread_type_id=bread_type_id)
     db.add(entry)
