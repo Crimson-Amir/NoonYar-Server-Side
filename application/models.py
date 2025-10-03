@@ -1,5 +1,4 @@
 import secrets
-from celery.worker.strategy import default
 from sqlalchemy.types import Unicode
 from database import Base
 from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger

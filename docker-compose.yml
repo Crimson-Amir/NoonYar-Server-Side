@@ -71,6 +71,12 @@ services:
       retries: 5
     restart: unless-stopped
 
+  migrate:
+    image: voidtrek/noonyar:latest
+    command: alembic upgrade head
+    env_file: .env
+    depends_on:
+      - db
 volumes:
   postgres_data:
   redis_data:

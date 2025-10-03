@@ -10,7 +10,7 @@ from application.logger_config import logger
 import random, time
 from application.helpers import endpoint_helper, token_helpers
 
-FILE_NAME = "user:authentication.py"
+FILE_NAME = "user:authentication"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 
 
