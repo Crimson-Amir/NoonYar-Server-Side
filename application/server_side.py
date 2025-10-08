@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import jwt, asyncio
-from logger_config import listener
+from logger_config import fastapi_listener
 from auth import create_access_token
 import aiomqtt
 from setting import settings
@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    listener.start()
+    fastapi_listener.start()
     app.state.mqtt_client = aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     yield
-    listener.stop()
+    fastapi_listener.stop()
     await app.state.redis.aclose()
 
     app.state.mqtt_task.cancel()

@@ -1,7 +1,7 @@
 import functools
 import crud, requests
 from celery import Celery
-from celery_logging import celery_logger
+from logger_config import celery_logger
 from database import SessionLocal
 from setting import settings
 import traceback, redis
@@ -141,6 +141,7 @@ def skip_customer(self, hardware_customer_id, bakery_id):
 def send_otp(self, mobile_number, code, expire_m=10):
     db = SessionLocal()
     try:
+        celery_logger.info("hello")
         url = f"https://api.sms.ir/v1/send/verify"
         data = {
             "mobile": str(mobile_number),
