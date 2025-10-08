@@ -1,6 +1,6 @@
 import secrets
 from sqlalchemy.types import Unicode
-from database import Base
+from application.database import Base
 from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger
 from sqlalchemy import ForeignKeyConstraint
 from datetime import datetime
