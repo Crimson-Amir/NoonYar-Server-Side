@@ -52,6 +52,7 @@ class BreadType(Base):
 
     bread_id = Column(Integer, primary_key=True)
     name = Column(Unicode(255), unique=True, nullable=False)
+    active = Column(Boolean, default=True)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     bakery_associations = relationship("BakeryBread", back_populates="bread", cascade="all, delete-orphan")

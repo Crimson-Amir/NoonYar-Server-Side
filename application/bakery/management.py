@@ -35,8 +35,31 @@ def require_admin(
 @handle_errors
 async def add_bakery(bakery: schemas.AddBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bakery = crud.add_bakery(db, bakery)
-    logger.info(f"{FILE_NAME}:add_bakery", extra={"bakery_name": bakery.name, "location": bakery.location})
+    logger.info(f"{FILE_NAME}:add_bakery", extra={"bakery_name": bakery.name, "location": bakery.location, "active": bakery.active})
     return bakery
+
+@router.post('/change_bakery_status')
+@handle_errors
+async def change_bakery_status(request: Request, bakery: schemas.ModifyBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
+    bakery = crud.set_bakery_active(db, bakery)
+    r = request.app.state.redis
+    if bakery.active:
+        await redis_helper.initialize_redis_sets(r, bakery.bakery_id)
+    else:
+        await redis_helper.purge_bakery_data(r, bakery.bakery_id)
+    logger.info(f"{FILE_NAME}:change_bakery_status", extra={"bakery_id": bakery.bakery_id, "active": bakery.active})
+    return bakery
+
+
+@router.delete('/delete_bakery/{bakery_id}')
+@handle_errors
+async def delete_bakery(request: Request, bakery_id, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
+    bakery = crud.delete_bakery(db, bakery_id)
+    if not bakery:
+        raise HTTPException(status_code=404, detail='Bakery does not exist.')
+    await redis_helper.purge_bakery_data(request.app.state.redis, bakery_id)
+    logger.info(f"{FILE_NAME}:delete_bakery", extra={"bakery_id": bakery_id})
+    return {'status': 'bakery removed.'}
 
 @router.post('/bakery_bread')
 @handle_errors
@@ -99,10 +122,36 @@ async def remove_single_bread_from_bakery(
 @router.post('/add_bread', response_model=schemas.BreadID)
 @handle_errors
 async def add_bread(request: Request, bread: schemas.AddBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
-    bread_id = crud.add_bread(db, bread)
+    try:
+        bread_id = crud.add_bread(db, bread)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Bread name already exists")
     await redis_helper.reset_bread_names(request.app.state.redis)
-    logger.info(f"{FILE_NAME}:add_bread", extra={"read_name": bread.name})
+    logger.info(f"{FILE_NAME}:add_bread", extra={"bread_name": bread.name, "active": bread.active})
     return bread_id
+
+
+@router.put('/change_bread_status')
+@handle_errors
+async def change_bread_status(request: Request, bread: schemas.ModifyBread, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
+    bread = crud.change_bread_status(db, bread)
+    if not bread:
+        raise HTTPException(status_code=404, detail='Bread does not exist')
+    await redis_helper.reset_bread_names(request.app.state.redis)
+    logger.info(f"{FILE_NAME}:change_bread_status", extra={"bread_id": bread.bread_id, 'active': bread.active})
+    return {'status': 'succesfuly updated.'}
+
+
+@router.delete('/delete_bread/{bread_id}')
+@handle_errors
+async def delete_bread(request: Request, bread_id: int, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
+    result = crud.delete_bread(db, bread_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Bread does not exist")
+    await redis_helper.reset_bread_names(request.app.state.redis)
+    logger.info(f"{FILE_NAME}:delete_bread", extra={"bread_id": bread_id})
+    return {"status": "removed succesfuly."}
 
 
 @router.put('/change_bread_names')

@@ -81,11 +81,17 @@ def generate_otp():
 @router.post('/enter-number')
 @handle_errors
 async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get_db)):
+    phone = user.phone_number.strip()
+    if not phone.startswith("09") or len(phone) != 11 or not phone.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid phone number. It must start with '09' and contain exactly 11 digits."
+        )
     code = str(generate_otp())
-    task = tasks.send_otp.delay(user.phone_number, code)
+    task = tasks.send_otp.delay(phone, code)
     # TODO: REMOVE THIS IN PRODACTION
     tasks.report_to_admin_api.delay(f"OTP CODE: {code}")
-    logger.info(f"{FILE_NAME}:enter_number", extra={"phone_number": user.phone_number})
+    logger.info(f"{FILE_NAME}:enter_number", extra={"phone_number": phone})
     return {'status': 'OK', 'message': 'OTP sent','task_id': task.id}
 
 @router.post('/verify-otp')

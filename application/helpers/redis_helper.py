@@ -227,7 +227,7 @@ async def reset_bread_names(r):
     bread_name_key = REDIS_KEY_BREAD_NAMES
 
     with SessionLocal() as db:
-        breads = crud.get_breads(db)
+        breads = crud.get_active_breads(db)
         bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
         pipe = r.pipeline()
@@ -249,7 +249,7 @@ async def get_bakery_bread_names(r):
         return raw
 
     with SessionLocal() as db:
-        breads = crud.get_breads(db)
+        breads = crud.get_active_breads(db)
         bread_names = {str(bread.bread_id): bread.name for bread in breads}
 
         pipe = r.pipeline()
@@ -586,3 +586,22 @@ async def initialize_redis_sets(r, bakery_id: int):
 
 async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
     await reset_timeout(r, bakery_id)
+
+async def purge_bakery_data(r, bakery_id: int):
+    keys = [
+        REDIS_KEY_RESERVATIONS.format(bakery_id),
+        REDIS_KEY_RESERVATION_ORDER.format(bakery_id),
+        REDIS_KEY_TIME_PER_BREAD.format(bakery_id),
+        REDIS_KEY_SKIPPED_CUSTOMER.format(bakery_id),
+        REDIS_KEY_LAST_KEY.format(bakery_id),
+        REDIS_KEY_UPCOMING_BREADS.format(bakery_id),
+        REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id),
+        REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id),
+        REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id),
+        REDIS_KEY_TIMEOUT_SEC.format(bakery_id),
+    ]
+
+    pipe = r.pipeline(transaction=True)
+    for key in keys:
+        pipe.delete(key)
+    await pipe.execute()

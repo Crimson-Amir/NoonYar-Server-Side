@@ -20,8 +20,8 @@ def get_bakery_breads(db: Session, bakery_id: int):
 def get_bakery(db: Session, bakery_id: int):
     return db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()
 
-def get_breads(db: Session):
-    return db.query(models.BreadType).all()
+def get_active_breads(db: Session):
+    return db.query(models.BreadType).filter(models.BreadType.active == True).all()
 
 def get_all_bakeries(db: Session):
     return db.query(models.Bakery).filter(models.Bakery.active == True).all()
@@ -99,18 +99,54 @@ def update_customers_status(db: Session, hardware_customer_id: int, bakery_id: i
     return result
 
 def add_bakery(db: Session, bakery: schemas.AddBakery):
-    bakery_db = models.Bakery(name=bakery.name, location=bakery.location)
+    bakery_db = models.Bakery(name=bakery.name, location=bakery.location, active=bakery.active)
     db.add(bakery_db)
     db.commit()
     db.refresh(bakery_db)
     return bakery_db
 
+def set_bakery_active(db: Session, bakery: schemas.ModifyBakery):
+    bakery = db.query(models.Bakery).filter(models.Bakery.id == bakery.bakery_id).first()
+    if not bakery:
+        return None
+    bakery.active = bakery.active
+    db.commit()
+    db.refresh(bakery)
+    return bakery
+
+def delete_bakery(db: Session, bakery_id: int):
+    bakery = db.query(models.Bakery).filter(models.Bakery.id == bakery_id).first()
+    if not bakery:
+        return None
+    db.delete(bakery)
+    db.commit()
+    return True
+
+
 def add_bread(db: Session, bread: schemas.AddBread):
-    bread_db = models.BreadType(name=bread.name)
+    bread_db = models.BreadType(name=bread.name, active=bread.active)
     db.add(bread_db)
     db.commit()
-    db.refresh(bread_db)
     return bread_db
+
+def delete_bread(db: Session, bread_id: int):
+    bread = db.query(models.BreadType).filter(models.BreadType.id == bread_id).first()
+    if not bread:
+        return None
+
+    db.delete(bread)
+    db.commit()
+    return True
+
+def change_bread_status(db: Session, bread: schemas.ModifyBread):
+    bread = db.query(models.BreadType).filter(models.BreadType.id == bread.bread_id).first()
+    if not bread:
+        return None
+    bread.active = bread.active
+    db.commit()
+    db.refresh(bread)
+    return bread
+
 
 def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_time: dict):
     new_entries = [
@@ -227,6 +263,14 @@ def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
     db.commit()
     db.refresh(new_admin)
     return new_admin
+
+def remove_admin(db: Session, admin_id: int):
+    admin = db.query(models.Admin).filter(models.Admin.id == admin_id).first()
+    if not admin:
+        return None
+    db.delete(admin)
+    db.commit()
+    return True
 
 def edit_bread_names(db: Session, bread_type_and_new_name: dict):
     stmt = (

@@ -7,8 +7,14 @@ class SignUpRequirement(BaseModel):
     last_name: str
     password: str
 
-class SignUpReturn(BaseModel):
+class UserID(BaseModel):
     user_id: int
+
+class AdminID(BaseModel):
+    admin_id: int
+
+class SignUpReturn(UserID):
+    pass
 
 class LogInRequirement(BaseModel):
     phone_number: str
@@ -33,6 +39,10 @@ class Initialize(BakeryID):
 class AddBakery(BaseModel):
     name: str
     location: str
+    active: bool = True
+
+class ModifyBakery(BakeryID):
+    active: bool
 
 class AddBakeryResult(BakeryID):
     token: str
@@ -42,12 +52,16 @@ class BreadID(BaseModel):
 
 class AddBread(BaseModel):
     name: str
+    active: bool = True
+
+class ModifyBread(BaseModel):
+    bread_id: int
+    active: bool
 
 class ModifySingleBreadToBakery(BreadID, BakeryID):
     cook_time_s: int
 
-class NewAdminRequirement(BaseModel):
-    user_id: int
+class NewAdminRequirement(UserID):
     status: bool = True
 
 class NewAdminResult(BaseModel):
