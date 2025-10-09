@@ -36,7 +36,8 @@ def require_admin(
 async def add_bakery(request: Request, bakery: schemas.AddBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bakery = crud.add_bakery(db, bakery)
     logger.info(f"{FILE_NAME}:add_bakery", extra={"bakery_name": bakery.name, "location": bakery.location, "active": bakery.active})
-    await redis_helper.initialize_redis_sets(request.app.state.redis, bakery.bakery_id)
+    if bakery.active:
+        await redis_helper.initialize_redis_sets(request.app.state.redis, bakery.bakery_id)
     return bakery
 
 @router.post('/change_bakery_status')

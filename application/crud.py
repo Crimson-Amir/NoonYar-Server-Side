@@ -105,7 +105,7 @@ def add_bakery(db: Session, bakery: schemas.AddBakery):
     return bakery_db
 
 def set_bakery_active(db: Session, bakery: schemas.ModifyBakery):
-    bakery = db.query(models.Bakery).filter(models.Bakery.id == bakery.bakery_id).first()
+    bakery = db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery.bakery_id).first()
     if not bakery:
         return None
     bakery.active = bakery.active
