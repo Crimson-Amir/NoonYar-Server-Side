@@ -1,11 +1,10 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import update, case, select
-import models, schemas
-from auth import hash_password_md5
+from application import models, schemas
+from application.auth import hash_password_md5
 import pytz
 from sqlalchemy import asc
 from datetime import datetime, time
-from helpers import database_helper
 
 def get_user_by_phone_number(db: Session, phone_number: str):
     return db.query(models.User).filter(models.User.phone_number == phone_number).first()
@@ -115,7 +114,7 @@ def set_bakery_active(db: Session, bakery: schemas.ModifyBakery):
     return bakery
 
 def delete_bakery(db: Session, bakery_id: int):
-    bakery = db.query(models.Bakery).filter(models.Bakery.id == bakery_id).first()
+    bakery = db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()
     if not bakery:
         return None
     db.delete(bakery)
@@ -130,7 +129,7 @@ def add_bread(db: Session, bread: schemas.AddBread):
     return bread_db
 
 def delete_bread(db: Session, bread_id: int):
-    bread = db.query(models.BreadType).filter(models.BreadType.id == bread_id).first()
+    bread = db.query(models.BreadType).filter(models.BreadType.bread_id == bread_id).first()
     if not bread:
         return None
 

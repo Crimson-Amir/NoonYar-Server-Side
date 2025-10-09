@@ -13,7 +13,6 @@ COPY alembic ./alembic
 
 # Expose FastAPI port
 EXPOSE 80
-ENV PYTHONPATH=/app/application
 
 # Command to run FastAPI
 CMD ["uvicorn", "application.server_side:app", "--host", "0.0.0.0", "--port", "80"]

@@ -1,5 +1,5 @@
 from typing import List, Dict
-from helpers import redis_helper
+from application.helpers import redis_helper
 
 class Algorithm:
 

@@ -3,7 +3,7 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from hashlib import md5
 from fastapi import HTTPException
-from setting import settings
+from application.setting import settings
 
 
 def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=settings.ACCESS_TOKEN_EXP_MIN)):

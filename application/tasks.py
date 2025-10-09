@@ -1,12 +1,12 @@
-import functools
-import crud, requests
+import functools, requests
+from application import crud
 from celery import Celery
-from logger_config import celery_logger
-from database import SessionLocal
-from setting import settings
+from application.logger_config import celery_logger
+from application.database import SessionLocal
+from application.setting import settings
 import traceback, redis
 from uuid import uuid4
-from helpers import token_helpers, redis_helper
+from application.helpers import token_helpers, redis_helper
 from redis import asyncio as aioredis
 import asyncio
 
