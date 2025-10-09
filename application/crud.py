@@ -137,13 +137,12 @@ def delete_bread(db: Session, bread_id: int):
     db.commit()
     return True
 
-def change_bread_status(db: Session, bread: schemas.ModifyBread):
-    bread = db.query(models.BreadType).filter(models.BreadType.bread_id == bread.bread_id).first()
+def change_bread_status(db: Session, bread_schema: schemas.ModifyBread):
+    bread = db.query(models.BreadType).filter(models.BreadType.bread_id == bread_schema.bread_id).first()
     if not bread:
         return None
-    bread.active = bread.active
+    bread.active = bread_schema.active
     db.commit()
-    db.refresh(bread)
     return bread
 
 
