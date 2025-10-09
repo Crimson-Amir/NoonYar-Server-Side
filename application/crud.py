@@ -104,13 +104,12 @@ def add_bakery(db: Session, bakery: schemas.AddBakery):
     db.refresh(bakery_db)
     return bakery_db
 
-def set_bakery_active(db: Session, bakery: schemas.ModifyBakery):
-    bakery = db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery.bakery_id).first()
+def change_bakery_status(db: Session, bakery_schema: schemas.ModifyBakery):
+    bakery = db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_schema.bakery_id).first()
     if not bakery:
         return None
-    bakery.active = bakery.active
+    bakery.active = bakery_schema.active
     db.commit()
-    db.refresh(bakery)
     return bakery
 
 def delete_bakery(db: Session, bakery_id: int):

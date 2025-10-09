@@ -43,14 +43,16 @@ async def add_bakery(request: Request, bakery: schemas.AddBakery, db: Session = 
 @router.post('/change_bakery_status')
 @handle_errors
 async def change_bakery_status(request: Request, bakery: schemas.ModifyBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
-    bakery = crud.set_bakery_active(db, bakery)
+    bakery = crud.change_bakery_status(db, bakery)
+    if not bakery:
+        raise HTTPException(status_code=404, detail='Bakery does not exist.')
     r = request.app.state.redis
     if bakery.active:
         await redis_helper.initialize_redis_sets(r, bakery.bakery_id)
     else:
         await redis_helper.purge_bakery_data(r, bakery.bakery_id)
     logger.info(f"{FILE_NAME}:change_bakery_status", extra={"bakery_id": bakery.bakery_id, "active": bakery.active})
-    return bakery
+    return {"status": "OK"}
 
 
 @router.delete('/delete_bakery/{bakery_id}')
