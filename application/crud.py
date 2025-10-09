@@ -138,7 +138,7 @@ def delete_bread(db: Session, bread_id: int):
     return True
 
 def change_bread_status(db: Session, bread: schemas.ModifyBread):
-    bread = db.query(models.BreadType).filter(models.BreadType.id == bread.bread_id).first()
+    bread = db.query(models.BreadType).filter(models.BreadType.bread_id == bread.bread_id).first()
     if not bread:
         return None
     bread.active = bread.active

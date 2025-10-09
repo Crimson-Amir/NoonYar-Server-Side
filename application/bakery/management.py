@@ -59,7 +59,8 @@ async def delete_bakery(request: Request, bakery_id, db: Session = Depends(endpo
         raise HTTPException(status_code=404, detail='Bakery does not exist.')
     await redis_helper.purge_bakery_data(request.app.state.redis, bakery_id)
     logger.info(f"{FILE_NAME}:delete_bakery", extra={"bakery_id": bakery_id})
-    return {'status': 'bakery removed.'}
+    return {'status': 'OK'}
+
 
 @router.post('/bakery_bread')
 @handle_errors
@@ -75,7 +76,7 @@ async def bakery_bread(
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     logger.info(f"{FILE_NAME}:bakery_bread", extra={"bakery_id": data.bakery_id, "bread_type_id_and_cook_time": data.bread_type_id_and_cook_time})
-    return {'status': 'successfully updated'}
+    return {'status': 'OK'}
 
 
 @router.put('/update_bakery_single_bread')
@@ -98,7 +99,7 @@ async def update_bakery_single_bread(
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     logger.info(f"{FILE_NAME}:add_single_bread_to_bakery", extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
 
-    return {'status': 'successful', 'state': state}
+    return {'status': 'OK', 'state': state}
 
 
 @router.delete('/remove_single_bread_from_bakery/{bakery_id}/{bread_id}')
@@ -115,7 +116,7 @@ async def remove_single_bread_from_bakery(
     if remove_entry:
         await mqtt_client.update_time_per_bread(request, bakery_id, new_config)
         logger.info(f"{FILE_NAME}:remove_single_bread_from_bakery", extra={"bakery_id": bakery_id, "bread_id": bread_id})
-        return {'status': 'Successfully deleted'}
+        return {'status': 'OK'}
     return {'status': 'No entry found'}
 
 
@@ -140,7 +141,7 @@ async def change_bread_status(request: Request, bread: schemas.ModifyBread, db: 
         raise HTTPException(status_code=404, detail='Bread does not exist')
     await redis_helper.reset_bread_names(request.app.state.redis)
     logger.info(f"{FILE_NAME}:change_bread_status", extra={"bread_id": bread.bread_id, 'active': bread.active})
-    return {'status': 'succesfuly updated.'}
+    return {'status': 'OK'}
 
 
 @router.delete('/delete_bread/{bread_id}')
@@ -151,7 +152,7 @@ async def delete_bread(request: Request, bread_id: int, db: Session = Depends(en
         raise HTTPException(status_code=404, detail="Bread does not exist")
     await redis_helper.reset_bread_names(request.app.state.redis)
     logger.info(f"{FILE_NAME}:delete_bread", extra={"bread_id": bread_id})
-    return {"status": "removed succesfuly."}
+    return {"status": "OK"}
 
 
 @router.put('/change_bread_names')
@@ -165,7 +166,7 @@ async def change_bread_names(
     crud.edit_bread_names(db, data.bread_id_and_names)
     await redis_helper.reset_bread_names(request.app.state.redis)
     logger.info(f"{FILE_NAME}:change_bread_names", extra={"bread_id_and_names": data.bread_id_and_names})
-    return {'status': 'successfully updated'}
+    return {'status': 'OK'}
 
 
 @router.post('/upcoming/add')
@@ -187,7 +188,7 @@ async def add_notify_bakery_bread(
 
     logger.info(f"{FILE_NAME}:add_upcoming_bread", extra={"bakery_id": data.bakery_id, "bread_id": data.bread_id})
     await redis_helper.add_upcoming_bread_to_bakery(r, data.bakery_id, data.bread_id)
-    return {'status': 'successfully added'}
+    return {'status': 'OK'}
 
 @router.delete('/upcoming/remove/{bakery_id}/{bread_id}')
 @handle_errors
@@ -203,7 +204,7 @@ async def remove_notify_bakery_bread(
     logger.info(f"{FILE_NAME}:remove_upcoming_bread", extra={"bakery_id": bakery_id, "bread_id": bread_id, "removed": removed})
     if removed:
         await redis_helper.remove_upcoming_bread_from_bakery(r, bakery_id, bread_id)
-    return {"status": "removed" if removed else "not_found"}
+    return {"status": "OK" if removed else "not_found"}
 
 
 @router.get('/upcoming/list/{bakery_id}')
