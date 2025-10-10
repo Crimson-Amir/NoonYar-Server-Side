@@ -22,7 +22,7 @@ def get_bakery(db: Session, bakery_id: int):
 def get_active_breads(db: Session):
     return db.query(models.BreadType).filter(models.BreadType.active == True).all()
 
-def get_all_bakeries(db: Session):
+def get_all_active_bakeries(db: Session):
     return db.query(models.Bakery).filter(models.Bakery.active == True).all()
 
 def get_today_customers(db: Session, bakery_id: int):
