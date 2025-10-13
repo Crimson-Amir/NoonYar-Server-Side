@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
 
 from application.helpers import endpoint_helper, redis_helper, token_helpers
@@ -54,6 +56,7 @@ async def new_customer(
 
     if customer_in_upcoming_customer:
         await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id)
+
     await mqtt_client.update_has_customer_in_queue(request, bakery_id)
 
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer})
@@ -344,6 +347,46 @@ async def update_timeout(
     logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
     return {"timeout_sec": new_timeout}
 
+
+@router.put('/new_bread')
+@handle_errors
+async def new_bread(
+        request: Request,
+        data: schemas.UpdateTimeoutRequest,
+        token: str = Depends(validate_token)
+):
+    bakery_id = data.bakery_id
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.hgetall(time_key)
+    pipe.get(frt_key)
+    pipe.zcard(breads_key)
+    time_per_bread, frt_min, bread_count = await pipe.execute()
+
+    if not time_per_bread:
+        raise ValueError('time_per_bread is empty')
+
+    time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
+
+    time_per_bread_values = time_per_bread.values()
+    avg_bread_time = sum(time_per_bread_values) / len(time_per_bread_values)
+    bread_cook_date = (datetime.now() + timedelta(minutes=avg_bread_time + int(frt_min))).timestamp()
+    bread_index = (bread_count if bread_count is not None else 0) + 1
+    await r.zadd(breads_key, {str(bread_cook_date): bread_index})
+    logger.info(f"{FILE_NAME}:new_bread", extra={"bakery_id": bakery_id, "bread_index": bread_index, "bread_cook_date": bread_cook_date})
+
+    return {
+        "bread_index": bread_index,
+        "cook_date": bread_cook_date,
+    }
 
 @router.get('/hardware_init')
 @handle_errors

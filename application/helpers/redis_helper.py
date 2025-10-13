@@ -15,6 +15,7 @@ REDIS_KEY_UPCOMING_CUSTOMERS = f"{REDIS_KEY_PREFIX}:upcoming_customers"
 REDIS_KEY_CURRENT_UPCOMING_CUSTOMER = f"{REDIS_KEY_PREFIX}:current_upcoming_customer"
 REDIS_KEY_FULL_ROUND_TIME_MIN = f"{REDIS_KEY_PREFIX}:full_round_time_min"
 REDIS_KEY_TIMEOUT_SEC = f"{REDIS_KEY_PREFIX}:timeout_sec"
+REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 def seconds_until_midnight_iran():
