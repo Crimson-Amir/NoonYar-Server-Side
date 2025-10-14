@@ -16,6 +16,8 @@ REDIS_KEY_CURRENT_UPCOMING_CUSTOMER = f"{REDIS_KEY_PREFIX}:current_upcoming_cust
 REDIS_KEY_FULL_ROUND_TIME_MIN = f"{REDIS_KEY_PREFIX}:full_round_time_min"
 REDIS_KEY_TIMEOUT_SEC = f"{REDIS_KEY_PREFIX}:timeout_sec"
 REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
+REDIS_KEY_LAST_BREAD_TIME = f"{REDIS_KEY_PREFIX}:last_bread_time"
+REDIS_KEY_BREAD_TIME_DIFFS = f"{REDIS_KEY_PREFIX}:bread_time_diff"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 def seconds_until_midnight_iran():
@@ -210,7 +212,7 @@ async def reset_bakery_metadata(r, bakery_id: int):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
 
     with SessionLocal() as db:
-        bakery_breads = crud.get_bakery_breads(db, bakery_id)
+        bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
 
         pipe = r.pipeline()
@@ -349,7 +351,7 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
 
     with SessionLocal() as db:
 
-        bakery_breads = crud.get_bakery_breads(db, bakery_id)
+        bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
         time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
         pipe = r.pipeline()
         pipe.delete(time_key)

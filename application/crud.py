@@ -12,12 +12,26 @@ def get_user_by_phone_number(db: Session, phone_number: str):
 def is_user_admin(db: Session, user_id: str):
     return db.query(models.Admin).filter_by(user_id=user_id, active=True).first()
 
-def get_bakery_breads(db: Session, bakery_id: int):
-    return db.query(models.BakeryBread).filter(models.BakeryBread.bakery_id == bakery_id).order_by(asc(
+def get_active_bakery_breads(db: Session, bakery_id: int):
+    return db.query(models.BakeryBread).join(
+        models.Bakery
+    ).join(
+        models.BreadType
+    ).filter(
+        models.BakeryBread.bakery_id == bakery_id,
+        models.Bakery.active == True,
+        models.BreadType.active == True,
+    ).order_by(asc(
         models.BakeryBread.bread_type_id)).all()
 
 def get_bakery(db: Session, bakery_id: int):
     return db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()
+
+def get_bakery_bread(db: Session, bakery_id: int, bread_id: int):
+    return db.query(models.BakeryBread).filter(
+        models.BakeryBread.bakery_id == bakery_id,
+        models.BakeryBread.bread_type_id == bread_id
+    ).first()
 
 def get_active_breads(db: Session):
     return db.query(models.BreadType).filter(models.BreadType.active == True).all()
@@ -176,6 +190,11 @@ def update_bread_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_tim
     result = db.execute(stmt)
     db.commit()
     return result
+
+def get_bread_by_bread_id(db: Session, bread_id:int):
+    return db.query(models.BreadType).filter(
+        models.BreadType.bread_id == bread_id
+    ).first()
 
 def remove_single_bread_from_bakery(db: Session, bakery_id: int, bread_type_id: int):
     bread_entry = (

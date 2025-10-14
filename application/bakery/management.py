@@ -86,22 +86,35 @@ async def bakery_bread(
 @router.put('/update_bakery_single_bread')
 @handle_errors
 async def update_bakery_single_bread(
-    request: Request,
-    data: schemas.ModifySingleBreadToBakery,
-    db: Session = Depends(endpoint_helper.get_db),
-    _: int = Depends(require_admin)
+        request: Request,
+        data: schemas.ModifySingleBreadToBakery,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin)
 ):
-    try:
-        crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
-        state = 'add'
-    except IntegrityError:
-        db.rollback()
+    # Validate that the bread exists
+    bread = crud.get_bread_by_bread_id(db, bread_id=data.bread_id)
+
+    if not bread:
+        raise HTTPException(status_code=404, detail="Bread type not found")
+
+    bakery = crud.get_bakery(db, data.bakery_id)
+
+    if not bakery:
+        raise HTTPException(status_code=404, detail="Bakery not found")
+
+    existing = crud.get_bakery_bread(db, data.bakery_id, data.bread_id)
+
+    if existing:
         crud.update_bread_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
         state = 'update'
+    else:
+        crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        state = 'add'
 
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
-    logger.info(f"{FILE_NAME}:add_single_bread_to_bakery", extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
+    logger.info(f"{FILE_NAME}:add_single_bread_to_bakery",
+                extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
 
     return {'status': 'OK', 'state': state}
 

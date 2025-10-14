@@ -348,14 +348,14 @@ async def update_timeout(
     return {"timeout_sec": new_timeout}
 
 
-@router.put('/new_bread')
+@router.post('/new_bread/{bakery_id}')
 @handle_errors
 async def new_bread(
-        request: Request,
-        data: schemas.UpdateTimeoutRequest,
-        token: str = Depends(validate_token)
+    bakery_id,
+    request: Request,
+    token: str = Depends(validate_token)
 ):
-    bakery_id = data.bakery_id
+    bakery_id = bakery_id
     if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -364,28 +364,56 @@ async def new_bread(
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
     breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+    last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
+    bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.get(frt_key)
     pipe.zcard(breads_key)
-    time_per_bread, frt_min, bread_count = await pipe.execute()
+    pipe.get(last_bread_time_key)
+    time_per_bread, frt_min, bread_count, last_bread_t = await pipe.execute()
 
-    if not time_per_bread:
-        raise ValueError('time_per_bread is empty')
+    if not time_per_bread or not frt_min:
+        raise ValueError('time_per_bread or full round trip is empty')
 
     time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
+    avg_bread_time = sum(time_per_bread.values()) / len(time_per_bread)
+    bread_count = int(bread_count or 0)
 
-    time_per_bread_values = time_per_bread.values()
-    avg_bread_time = sum(time_per_bread_values) / len(time_per_bread_values)
-    bread_cook_date = (datetime.now() + timedelta(minutes=avg_bread_time + int(frt_min))).timestamp()
-    bread_index = (bread_count if bread_count is not None else 0) + 1
-    await r.zadd(breads_key, {str(bread_cook_date): bread_index})
-    logger.info(f"{FILE_NAME}:new_bread", extra={"bakery_id": bakery_id, "bread_index": bread_index, "bread_cook_date": bread_cook_date})
+    now = datetime.now()
+    now_ts = int(now.timestamp())
+    bread_cook_date = int((now + timedelta(minutes=avg_bread_time + frt_min)).timestamp())
+    bread_index = bread_count + 1
+
+    time_diff = None
+    if last_bread_t:
+        last_bread_t = int(float(last_bread_t))
+        time_diff = now_ts - last_bread_t
+
+    pipe = r.pipeline(transaction=True)
+    pipe.set(last_bread_time_key, now_ts)
+    pipe.zadd(breads_key, {str(bread_cook_date): bread_index})
+
+    if time_diff is not None:
+        pipe.zadd(bread_diff_key, {str(time_diff): bread_index})
+
+    await pipe.execute()
+
+    logger.info(
+        f"{FILE_NAME}:new_bread",
+        extra={
+            "bakery_id": bakery_id,
+            "bread_index": bread_index,
+            "bread_cook_date": bread_cook_date,
+            "time_diff": time_diff,
+        }
+    )
 
     return {
         "bread_index": bread_index,
         "cook_date": bread_cook_date,
+        "time_diff": time_diff,
     }
 
 @router.get('/hardware_init')
