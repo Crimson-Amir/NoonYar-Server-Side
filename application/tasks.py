@@ -160,3 +160,21 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
             await r.close()
 
     asyncio.run(_task())
+
+
+@celery_app.task()
+@handle_task_errors
+def calculate_new_time_per_bread(bakery_id):
+    r = aioredis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True
+    )
+
+    bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
+    time_diffs = r.zrange(bread_diff_key, 0, -1)
+
+    if not time_diffs:
+        return None
+
+    time_diffs = [int(td) for td in time_diffs]
+    average_time_diff = sum(time_diffs) / len(time_diffs)
