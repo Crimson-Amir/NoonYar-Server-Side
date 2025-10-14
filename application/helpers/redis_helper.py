@@ -1,8 +1,7 @@
 from fastapi import HTTPException
 from application import crud
 from application.database import SessionLocal
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from application.helpers.general_helpers import seconds_until_midnight_iran
 
 REDIS_KEY_PREFIX = "bakery:{0}"
 REDIS_KEY_RESERVATIONS = f"{REDIS_KEY_PREFIX}:reservations"
@@ -19,14 +18,6 @@ REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
 REDIS_KEY_LAST_BREAD_TIME = f"{REDIS_KEY_PREFIX}:last_bread_time"
 REDIS_KEY_BREAD_TIME_DIFFS = f"{REDIS_KEY_PREFIX}:bread_time_diff"
 REDIS_KEY_BREAD_NAMES = "bread_names"
-
-def seconds_until_midnight_iran():
-    tz = ZoneInfo("Asia/Tehran")
-    now = datetime.now(tz)
-    midnight = (now + timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return int((midnight - now).total_seconds())
 
 async def handle_time_per_bread(r, bakery_id):
     time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)

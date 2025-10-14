@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
-
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
-
+from application.helpers.general_helpers import seconds_until_midnight_iran
 from application.helpers import endpoint_helper, redis_helper, token_helpers
 from application import tasks, algorithm, mqtt_client, crud, schemas
 from application.logger_config import logger
@@ -347,7 +346,6 @@ async def update_timeout(
     logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
     return {"timeout_sec": new_timeout}
 
-
 @router.post('/new_bread/{bakery_id}')
 @handle_errors
 async def new_bread(
@@ -378,25 +376,29 @@ async def new_bread(
         raise ValueError('time_per_bread or full round trip is empty')
 
     time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
-    avg_bread_time = sum(time_per_bread.values()) / len(time_per_bread)
+    avg_bread_time = sum(time_per_bread.values()) // len(time_per_bread)
     bread_count = int(bread_count or 0)
-
+    frt_min = int(frt_min)
     now = datetime.now()
     now_ts = int(now.timestamp())
     bread_cook_date = int((now + timedelta(minutes=avg_bread_time + frt_min)).timestamp())
     bread_index = bread_count + 1
+    ttl = seconds_until_midnight_iran()
 
     time_diff = None
+
     if last_bread_t:
         last_bread_t = int(float(last_bread_t))
         time_diff = now_ts - last_bread_t
 
     pipe = r.pipeline(transaction=True)
-    pipe.set(last_bread_time_key, now_ts)
+    pipe.set(last_bread_time_key, now_ts, ex=ttl)
     pipe.zadd(breads_key, {str(bread_cook_date): bread_index})
+    pipe.expire(breads_key, ttl)
 
     if time_diff is not None:
         pipe.zadd(bread_diff_key, {str(time_diff): bread_index})
+        pipe.expire(bread_diff_key, ttl)
 
     await pipe.execute()
 
