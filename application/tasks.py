@@ -162,19 +162,54 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
     asyncio.run(_task())
 
 
-@celery_app.task()
+@celery_app.task(bind=True)
 @handle_task_errors
-def calculate_new_time_per_bread(bakery_id):
+def change_bakeries_time_per_bread(self):
+    with SessionLocal() as session:
+        all_bakeries = crud.get_all_active_bakeries(session)
+        for bakery in all_bakeries:
+            calculate_new_time_per_bread.delay(bakery.bakery_id)
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def calculate_new_time_per_bread(self, bakery_id):
     r = aioredis.from_url(
         settings.REDIS_URL,
         decode_responses=True
     )
 
     bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
-    time_diffs = r.zrange(bread_diff_key, 0, -1)
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.zrange(bread_diff_key, 0, -1)
+    pipe.hgetall(time_key)
+    time_diffs, time_per_bread_raw = pipe.execute()
 
     if not time_diffs:
         return None
 
-    time_diffs = [int(td) for td in time_diffs]
-    average_time_diff = sum(time_diffs) / len(time_diffs)
+    if not time_per_bread_raw:
+        raise ValueError("time_per_bread is empty")
+
+    time_per_bread = {k: int(v) for k, v in time_per_bread_raw.items()}
+    time_per_bread_values = time_per_bread.values()
+
+    time_diffs = [int(td) for td in time_diffs if 20 < int(td) < 80]
+
+    if len(time_diffs) >= 15:
+        average_time_diff = sum(time_diffs) // len(time_diffs)
+        current_average_time = sum(time_per_bread_values) // len(time_per_bread_values)
+        differnet_second = current_average_time + average_time_diff
+
+        with session_scope() as db:
+            crud.new_cook_avreage_time(db, bakery_id, average_time_diff)
+            all_bakery_breads = crud.get_bakery_breads(db, bakery_id)
+            for bread in all_bakery_breads:
+                new_cook_time = bread.cook_time_s + differnet_second
+                crud.update_bread_bakery_no_commit(db, bakery_id, bread.bread_type_id, new_cook_time)
+
+    pipe = r.pipeline()
+    pipe.zrem(bread_diff_key, *time_diffs)
+    pipe.execute()
+

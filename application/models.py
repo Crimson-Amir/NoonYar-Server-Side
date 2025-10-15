@@ -44,6 +44,7 @@ class Bakery(Base):
     full_round_time_min = Column(Integer, nullable=False, default=10)
     timeout_sec = Column(Integer, nullable=False, default=0)
     bread_associations = relationship("BakeryBread", back_populates="bakery", cascade="all, delete-orphan")
+    bread_cook_time_log_associations = relationship("BreadCookTimeLog", back_populates="bakery", cascade="all, delete-orphan")
     customers = relationship("Customer", back_populates="bakery")
 
 
@@ -136,6 +137,17 @@ class UpcomingCustomer(Base):
     customer_id = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), primary_key=True)
     customer = relationship("Customer", back_populates="upcoming_associations")
 
+
+class BreadCookTimeLog(Base):
+    __tablename__ = 'bread_cook_time_log'
+
+    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), primary_key=True)
+    new_avreage_cook_time = Column(Integer, nullable=False)
+    register_date = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    bakery = relationship("Bakery", back_populates="bread_cook_time_log_associations")
+
+
 # class OTP(Base):
 #     __tablename__ = 'otp_table'
 #
@@ -145,4 +157,3 @@ class UpcomingCustomer(Base):
 #     valid = Column(Boolean, default=False)
 #     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 #     exception_at = Column(DateTime, nullable=False)
-#

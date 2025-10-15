@@ -105,11 +105,13 @@ async def update_bakery_single_bread(
     existing = crud.get_bakery_bread(db, data.bakery_id, data.bread_id)
 
     if existing:
-        crud.update_bread_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        crud.update_bread_bakery_no_commit(db, data.bakery_id, data.bread_id, data.cook_time_s)
         state = 'update'
     else:
-        crud.add_single_bread_to_bakery(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        crud.add_single_bread_to_bakery_no_commit(db, data.bakery_id, data.bread_id, data.cook_time_s)
         state = 'add'
+
+    db.commit()
 
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)

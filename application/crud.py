@@ -24,6 +24,12 @@ def get_active_bakery_breads(db: Session, bakery_id: int):
     ).order_by(asc(
         models.BakeryBread.bread_type_id)).all()
 
+
+def get_bakery_breads(db: Session, bakery_id: int):
+    return db.query(models.BakeryBread).filter(
+        models.BakeryBread.bakery_id == bakery_id,
+    ).all()
+
 def get_bakery(db: Session, bakery_id: int):
     return db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()
 
@@ -141,6 +147,11 @@ def add_bread(db: Session, bread: schemas.AddBread):
     db.commit()
     return bread_db
 
+def new_cook_avreage_time(db: Session, bakery_id, new_avreage_time):
+    new = models.BreadCookTimeLog(bakery_id=bakery_id, new_avreage_cook_time=new_avreage_time)
+    db.add(new)
+    return new
+
 def delete_bread(db: Session, bread_id: int):
     bread = db.query(models.BreadType).filter(models.BreadType.bread_id == bread_id).first()
     if not bread:
@@ -171,16 +182,15 @@ def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_tim
 
     db.add_all(new_entries)
 
-def add_single_bread_to_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
+def add_single_bread_to_bakery_no_commit(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
     new_entry = models.BakeryBread(
         bakery_id=bakery_id,
         bread_type_id=int(bread_type_id),
         cook_time_s=cook_time_s
     )
     db.add(new_entry)
-    db.commit()
 
-def update_bread_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
+def update_bread_bakery_no_commit(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
     stmt = (
         update(models.BakeryBread)
         .where(models.BakeryBread.bread_type_id == bread_type_id)
@@ -188,7 +198,6 @@ def update_bread_bakery(db: Session, bakery_id:int, bread_type_id: int, cook_tim
         .values(cook_time_s=cook_time_s)
     )
     result = db.execute(stmt)
-    db.commit()
     return result
 
 def get_bread_by_bread_id(db: Session, bread_id:int):
