@@ -12,6 +12,7 @@ import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from application.mqtt_client import mqtt_handler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from application.helpers.token_helpers import TokenBlacklist, set_cookie
 from application import tasks
@@ -43,7 +44,13 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(
         tasks.initialize_bakeries_redis_sets.delay,
         CronTrigger(hour=0, minute=0, timezone=ZoneInfo("Asia/Tehran")),
-        args=[True]
+        args=[True],
+        id="initialize_bakeries_daily"
+    )
+    scheduler.add_job(
+        tasks.change_bakeries_time_per_bread.delay,  # <--- your new periodic Celery task
+        IntervalTrigger(minutes=5, timezone=ZoneInfo("Asia/Tehran")),
+        id="change_bakeries_time_per_bread"
     )
     scheduler.start()
 

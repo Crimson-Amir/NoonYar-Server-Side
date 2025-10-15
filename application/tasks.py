@@ -174,7 +174,7 @@ def change_bakeries_time_per_bread(self):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def calculate_new_time_per_bread(self, bakery_id):
-    r = aioredis.from_url(
+    r = redis.from_url(
         settings.REDIS_URL,
         decode_responses=True
     )
@@ -185,7 +185,7 @@ def calculate_new_time_per_bread(self, bakery_id):
     pipe.zrange(bread_diff_key, 0, -1)
     pipe.hgetall(time_key)
     time_diffs, time_per_bread_raw = pipe.execute()
-
+    report_to_admin_api.delay(f"calculate_new_time_per_bread:\n\n{time_diffs}\n{time_per_bread_raw}")
     if not time_diffs:
         return None
 
@@ -195,18 +195,20 @@ def calculate_new_time_per_bread(self, bakery_id):
     time_per_bread = {k: int(v) for k, v in time_per_bread_raw.items()}
     time_per_bread_values = time_per_bread.values()
 
-    time_diffs = [int(td) for td in time_diffs if 20 < int(td) < 80]
+    time_diffs_clean = [int(td) for td in time_diffs if 20 <= int(td) <= 80]
+    report_to_admin_api.delay(f"time_diffs:\n\n{time_diffs_clean}")
 
-    if len(time_diffs) >= 15:
-        average_time_diff = sum(time_diffs) // len(time_diffs)
+    if len(time_diffs_clean) >= 5:
+        average_time_diff = sum(time_diffs_clean) // len(time_diffs_clean)
         current_average_time = sum(time_per_bread_values) // len(time_per_bread_values)
-        differnet_second = current_average_time + average_time_diff
+        differnet_second = current_average_time - average_time_diff
+        report_to_admin_api.delay(f"average_time_diff:\n\n{average_time_diff}\ncurrent_average_time:{current_average_time}\ndiffernet_second:{differnet_second}")
 
         with session_scope() as db:
             crud.new_cook_avreage_time(db, bakery_id, average_time_diff)
             all_bakery_breads = crud.get_bakery_breads(db, bakery_id)
             for bread in all_bakery_breads:
-                new_cook_time = bread.cook_time_s + differnet_second
+                new_cook_time = abs(bread.cook_time_s + differnet_second)
                 crud.update_bread_bakery_no_commit(db, bakery_id, bread.bread_type_id, new_cook_time)
 
     pipe = r.pipeline()
