@@ -357,6 +357,23 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
         return time_per_bread
 
 
+def reset_time_per_bread_sync(r, db, bakery_id: int):
+    time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
+    time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
+    pipe = r.pipeline()
+    pipe.delete(time_key)
+
+    if time_per_bread:
+        pipe.hset(time_key, mapping=time_per_bread)
+        ttl = seconds_until_midnight_iran()
+        pipe.expire(time_key, ttl)
+
+    pipe.execute()
+    print("fetch time per bread from db")
+    return time_per_bread
+
+
 async def get_last_ticket_number(r, bakery_id, fetch_from_redis_first=True):
     last_one_key = REDIS_KEY_LAST_KEY.format(bakery_id)
     if fetch_from_redis_first:

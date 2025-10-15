@@ -185,7 +185,9 @@ def calculate_new_time_per_bread(self, bakery_id):
     pipe.zrange(bread_diff_key, 0, -1)
     pipe.hgetall(time_key)
     time_diffs, time_per_bread_raw = pipe.execute()
+
     report_to_admin_api.delay(f"calculate_new_time_per_bread:\n\n{time_diffs}\n{time_per_bread_raw}")
+
     if not time_diffs:
         return None
 
@@ -202,14 +204,16 @@ def calculate_new_time_per_bread(self, bakery_id):
         average_time_diff = sum(time_diffs_clean) // len(time_diffs_clean)
         current_average_time = sum(time_per_bread_values) // len(time_per_bread_values)
         differnet_second = current_average_time - average_time_diff
-        report_to_admin_api.delay(f"average_time_diff:\n\n{average_time_diff}\ncurrent_average_time:{current_average_time}\ndiffernet_second:{differnet_second}")
+        report_to_admin_api.delay(f"average_time_diff:{average_time_diff}\ncurrent_average_time:{current_average_time}\ndiffernet_second:{differnet_second}")
 
         with session_scope() as db:
             crud.new_cook_avreage_time(db, bakery_id, average_time_diff)
             all_bakery_breads = crud.get_bakery_breads(db, bakery_id)
             for bread in all_bakery_breads:
                 new_cook_time = abs(bread.cook_time_s + differnet_second)
+                report_to_admin_api.delay(f"bread_id: {bread.bread_type_id}\nnew_cook_time: {new_cook_time}")
                 crud.update_bread_bakery_no_commit(db, bakery_id, bread.bread_type_id, new_cook_time)
+            redis_helper.reset_time_per_bread_sync(r, db, bakery_id)
 
     pipe = r.pipeline()
     pipe.zrem(bread_diff_key, *time_diffs)

@@ -397,7 +397,7 @@ async def new_bread(
     pipe.expire(breads_key, ttl)
 
     if time_diff is not None:
-        pipe.zadd(bread_diff_key, {str(time_diff): bread_index})
+        pipe.zadd(bread_diff_key, {str(bread_index): time_diff})
         pipe.expire(bread_diff_key, ttl)
 
     await pipe.execute()

@@ -140,8 +140,8 @@ class UpcomingCustomer(Base):
 
 class BreadCookTimeLog(Base):
     __tablename__ = 'bread_cook_time_log'
-
-    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), primary_key=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'))
     new_avreage_cook_time = Column(Integer, nullable=False)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
