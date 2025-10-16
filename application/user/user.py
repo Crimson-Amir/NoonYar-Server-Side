@@ -29,52 +29,89 @@ async def home(request: Request):
     data = await decode_access_token(request)
     return {'status': 'OK', 'data': data}
 
+
 @router.get("/res/")
-@handle_errors
+# @handle_errors
 async def queue_check(request: Request, b: int, t: int):
+    """Check the queue status for a bakery and a target reservation number."""
     data = await decode_access_token(request)
     r = request.app.state.redis
 
+    # Redis keys
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(b)
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(b)
     name_key = redis_helper.REDIS_KEY_BREAD_NAMES
 
+    # Fetch all data in one pipeline
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
     pipe.hgetall(name_key)
-    time_per_bread, reservations_map, bread_names = await pipe.execute()
+    time_per_bread_raw, reservations_map, bread_names_raw = await pipe.execute()
 
-    bread_time = {int(k): int(v) for k, v in time_per_bread.items()}
-    reservation_dict = {int(k): v for k, v in reservations_map.items()}
+    # Convert Redis byte/string values
+    bread_time = {int(k): int(v) for k, v in time_per_bread_raw.items()}
+    reservation_dict = {
+        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
+    }
+    bread_names = {int(k): v for k, v in bread_names_raw.items()}
 
+    # Quick validation
     if not bread_time:
         return {'msg': 'bakery does not exist'}
     if not reservation_dict:
         return {'msg': 'queue is empty'}
 
-    sorted_keys = sorted(reservation_dict.keys())
+    # Sort reservations (each key is a reservation number)
+    reservation_keys = sorted(reservation_dict.keys())
     algorithm_instance = Algorithm()
 
-    is_user_exist = t in sorted_keys
-    reservation_number = t if is_user_exist else sorted_keys[-1]
-    people_in_queue = sum(1 for key in sorted_keys if key < reservation_number)
+    # Determine if target user exists
+    is_user_exist = t in reservation_keys
+    reservation_number = t if is_user_exist else reservation_keys[-1]
+
+    # Count people before the user in queue
+    people_in_queue = sum(1 for key in reservation_keys if key < reservation_number)
+
+    # Compute average bread time
     average_bread_time = sum(bread_time.values()) // len(bread_time)
-    sorted_keys = sorted(bread_time.keys())
-    time_per_bread_list = [bread_time[k] for k in sorted_keys]
+7
+    # Prepare ordered list of time per bread (for algorithm)
+    bread_ids_sorted = sorted(bread_time.keys())
+    time_per_bread_list = [bread_time[k] for k in bread_ids_sorted]
 
+    # Calculate total time for customers before the target one
     in_queue_customers_time = await algorithm_instance.calculate_in_queue_customers_time(
-        sorted_keys, reservation_number, reservation_dict, time_per_bread_list, r=request.app.state.redis, bakery_id=b)
+        reservation_keys,
+        reservation_number,
+        reservation_dict,
+        time_per_bread_list,
+        r=r,
+        bakery_id=b
+    )
 
+    # Compute empty slot time (corrected: use reservation keys, not bread keys)
     empty_slot_time = algorithm_instance.compute_empty_slot_time(
-        sorted_keys, reservation_number, reservation_dict) * average_bread_time
-    
-    bread_ids = bread_time.keys()
-    user_breads = {
-        bread_names.get(bid, bid): count for bid, count in zip(bread_ids, reservation_dict.get(reservation_number, []))} if is_user_exist else None
+        reservation_keys,
+        reservation_number,
+        reservation_dict
+    ) * average_bread_time
 
-    ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(r, b, user_breads, time_per_bread)
+    # Get user breads if exists
+    user_breads = None
+    if is_user_exist:
+        # Zip bread IDs with user's reserved bread counts
+        user_breads = {
+            bread_names.get(bid, str(bid)): count
+            for bid, count in zip(bread_ids_sorted, reservation_dict[reservation_number])
+        }
 
+    # Call your ready-status calculator
+    ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
+        r, b, user_breads, bread_time
+    )
+
+    # Return final response
     return {
         "ready": ready,
         "accurate_time": accurate_time,
