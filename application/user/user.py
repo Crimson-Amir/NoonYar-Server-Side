@@ -73,7 +73,12 @@ async def queue_check(request: Request, b: int, t: int):
     user_breads = {
         bread_names.get(bid, bid): count for bid, count in zip(bread_ids, reservation_dict.get(reservation_number, []))} if is_user_exist else None
 
+    ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(r, b, user_breads, time_per_bread)
+
     return {
+        "ready": ready,
+        "accurate_time": accurate_time,
+        "wait_until": wait_until,
         "is_user_exists": is_user_exist,
         "people_in_queue": people_in_queue,
         "empty_slot_time_avg": empty_slot_time,

@@ -48,8 +48,8 @@ async def lifespan(app: FastAPI):
         id="initialize_bakeries_daily"
     )
     scheduler.add_job(
-        tasks.change_bakeries_time_per_bread.delay,  # <--- your new periodic Celery task
-        IntervalTrigger(minutes=5, timezone=ZoneInfo("Asia/Tehran")),
+        tasks.change_bakeries_time_per_bread.delay,
+        IntervalTrigger(minutes=30, timezone=ZoneInfo("Asia/Tehran")),
         id="change_bakeries_time_per_bread"
     )
     scheduler.start()

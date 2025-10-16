@@ -145,7 +145,15 @@ async def current_ticket(
     customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, current_ticket_id)
     time_per_bread, customer_reservations = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservations)
+    ready, _, wait_until = await redis_helper.calculate_ready_status(r, bakery_id, current_user_detail, time_per_bread)
+
+    if ready:
+        removed = await redis_helper.consume_ready_breads(r, bakery_id, current_user_detail)
+        logger.info(f"Removed {removed} breads for ticket {current_ticket_id}")
+
     return {
+        "ready": ready,
+        "wait_until": wait_until,
         "has_customer_in_queue": True,
         "current_ticket_id": current_ticket_id,
         "current_user_detail": current_user_detail

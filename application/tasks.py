@@ -174,48 +174,38 @@ def change_bakeries_time_per_bread(self):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def calculate_new_time_per_bread(self, bakery_id):
-    r = redis.from_url(
-        settings.REDIS_URL,
-        decode_responses=True
-    )
+    r = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
     bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+
     pipe = r.pipeline()
-    pipe.zrange(bread_diff_key, 0, -1)
+    pipe.zrange(bread_diff_key, 0, -1, withscores=True)
     pipe.hgetall(time_key)
-    time_diffs, time_per_bread_raw = pipe.execute()
+    zitems, time_per_bread_raw = pipe.execute()
 
-    report_to_admin_api.delay(f"calculate_new_time_per_bread:\n\n{time_diffs}\n{time_per_bread_raw}")
-
-    if not time_diffs:
+    if not zitems:
         return None
 
     if not time_per_bread_raw:
         raise ValueError("time_per_bread is empty")
 
     time_per_bread = {k: int(v) for k, v in time_per_bread_raw.items()}
-    time_per_bread_values = time_per_bread.values()
+    time_per_bread_values = list(time_per_bread.values())
 
-    time_diffs_clean = [int(td) for td in time_diffs if 20 <= int(td) <= 80]
-    report_to_admin_api.delay(f"time_diffs:\n\n{time_diffs_clean}")
+    time_diffs_clean = [int(td) for _, td in zitems if 20 <= int(td) <= 80]
 
-    if len(time_diffs_clean) >= 5:
+    if len(time_diffs_clean) >= 15:
         average_time_diff = sum(time_diffs_clean) // len(time_diffs_clean)
         current_average_time = sum(time_per_bread_values) // len(time_per_bread_values)
-        differnet_second = current_average_time - average_time_diff
-        report_to_admin_api.delay(f"average_time_diff:{average_time_diff}\ncurrent_average_time:{current_average_time}\ndiffernet_second:{differnet_second}")
+        differnet_second =  average_time_diff - current_average_time
 
         with session_scope() as db:
             crud.new_cook_avreage_time(db, bakery_id, average_time_diff)
             all_bakery_breads = crud.get_bakery_breads(db, bakery_id)
             for bread in all_bakery_breads:
-                new_cook_time = abs(bread.cook_time_s + differnet_second)
-                report_to_admin_api.delay(f"bread_id: {bread.bread_type_id}\nnew_cook_time: {new_cook_time}")
+                new_cook_time = max(20, min(80, bread.cook_time_s + differnet_second))
                 crud.update_bread_bakery_no_commit(db, bakery_id, bread.bread_type_id, new_cook_time)
             redis_helper.reset_time_per_bread_sync(r, db, bakery_id)
 
-    pipe = r.pipeline()
-    pipe.zrem(bread_diff_key, *time_diffs)
-    pipe.execute()
-
+    r.zrem(bread_diff_key, *[bread_index for bread_index, _ in zitems])

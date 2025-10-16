@@ -2,6 +2,8 @@ from fastapi import HTTPException
 from application import crud
 from application.database import SessionLocal
 from application.helpers.general_helpers import seconds_until_midnight_iran
+import time
+from collections import defaultdict
 
 REDIS_KEY_PREFIX = "bakery:{0}"
 REDIS_KEY_RESERVATIONS = f"{REDIS_KEY_PREFIX}:reservations"
@@ -616,3 +618,57 @@ async def purge_bakery_data(r, bakery_id: int):
     for key in keys:
         pipe.delete(key)
     await pipe.execute()
+
+
+async def calculate_ready_status(r, bakery_id: int, current_user_detail: dict, time_per_bread: dict):
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    full_round_key = REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+
+    now = time.time()
+    bread_count = sum(current_user_detail.values())
+    avrage_cook_time = sum(time_per_bread.values()) // len(time_per_bread)
+
+    # --- Single pipeline ---
+    pipe = r.pipeline()
+    pipe.get(full_round_key)
+    pipe.zrange(breads_key, 0, bread_count - 1)
+    full_round_time_min_raw, zitems_raw = await pipe.execute()
+
+    # Convert results
+    full_round_time_min = int(full_round_time_min_raw or 0)
+    zitems = [float(z) for z in zitems_raw]
+
+    # Scenario 1: No bread at all
+    if not zitems:
+        cook_time_second = sum(count * time_per_bread[bread_id] for bread_id, count in current_user_detail.items())
+        wait_until_s = (full_round_time_min * 60) + cook_time_second
+        return False, False, int(wait_until_s)
+
+    # Scenario 2: Not enough breads
+    if bread_count > len(zitems):
+        how_many_left = bread_count - len(zitems)
+        left_breads_second = how_many_left * avrage_cook_time
+        return False, False, int(left_breads_second)
+
+    # Scenario 3: Enough breads (or more)
+    last_bread_time = zitems[bread_count - 1]
+    if now >= last_bread_time:
+        return True, False, None
+    else:
+        return False, True, int(last_bread_time - now)
+
+async def consume_ready_breads(r, bakery_id: int, current_user_detail: dict):
+    """
+    Remove breads used for the current ticket from Redis.
+    """
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    bread_count = sum(current_user_detail.values())
+
+    # Fetch first N breads (oldest / ready first)
+    zitems = await r.zrange(breads_key, 0, bread_count - 1)
+    if not zitems:
+        return 0
+
+    # Remove them from the sorted set
+    removed_count = await r.zrem(breads_key, *zitems)
+    return removed_count
