@@ -19,6 +19,7 @@ REDIS_KEY_TIMEOUT_SEC = f"{REDIS_KEY_PREFIX}:timeout_sec"
 REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
 REDIS_KEY_LAST_BREAD_TIME = f"{REDIS_KEY_PREFIX}:last_bread_time"
 REDIS_KEY_BREAD_TIME_DIFFS = f"{REDIS_KEY_PREFIX}:bread_time_diff"
+REDIS_KEY_LAST_BREAD_INDEX = f"{REDIS_KEY_PREFIX}:last_bread_index"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 async def handle_time_per_bread(r, bakery_id):
@@ -345,7 +346,7 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
     with SessionLocal() as db:
 
         bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
-        time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
+        time_per_bread = {str(bread.bread_type_id): int(bread.cook_time_s) for bread in bakery_breads}
         pipe = r.pipeline()
         pipe.delete(time_key)
 
@@ -620,42 +621,81 @@ async def purge_bakery_data(r, bakery_id: int):
     await pipe.execute()
 
 
-async def calculate_ready_status(r, bakery_id: int, current_user_detail: dict, time_per_bread: dict):
+async def calculate_ready_status(
+        r, bakery_id: int, current_user_detail: dict, time_per_bread: dict,
+        reservation_keys: list, reservation_number: int, reservation_dict: dict
+):
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
     full_round_key = REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
 
+    people_before = [key for key in reservation_keys if key < reservation_number]
+    breads_before = sum(sum(reservation_dict[k]) for k in people_before)
+
     now = time.time()
     bread_count = sum(current_user_detail.values())
-    avrage_cook_time = sum(time_per_bread.values()) // len(time_per_bread)
+    average_cook_time = sum(time_per_bread.values()) // len(time_per_bread)
+    total_needed_breads = breads_before + bread_count
 
     # --- Single pipeline ---
     pipe = r.pipeline()
     pipe.get(full_round_key)
-    pipe.zrange(breads_key, 0, bread_count - 1)
+    pipe.zrange(breads_key, 0, total_needed_breads - 1)
     full_round_time_min_raw, zitems_raw = await pipe.execute()
 
     # Convert results
     full_round_time_min = int(full_round_time_min_raw or 0)
     zitems = [float(z) for z in zitems_raw]
 
-    # Scenario 1: No bread at all
+    this_ticket_breads = zitems[breads_before : breads_before + bread_count]
+
     if not zitems:
+        total_wait_s = full_round_time_min * 60
+        for key in reservation_keys:
+            if key > reservation_number:
+                break
+
+            breads_for_person = reservation_dict[key]
+            total_wait_s += sum(
+                count * time_per_bread[bread_id]
+                for bread_id, count in zip(time_per_bread.keys(), breads_for_person)
+            )
+        return False, False, int(total_wait_s)
+
+    if not this_ticket_breads:
         cook_time_second = sum(count * time_per_bread[bread_id] for bread_id, count in current_user_detail.items())
-        wait_until_s = (full_round_time_min * 60) + cook_time_second
-        return False, False, int(wait_until_s)
+
+        total_remaining_before = 0
+        total_breads_cooked = len(zitems)
+
+        for key in people_before:
+            breads_for_person = reservation_dict[key]
+            for count in breads_for_person:
+                if total_breads_cooked <= 0:
+                    total_remaining_before += count * average_cook_time
+                else:
+                    if count <= total_breads_cooked:
+                        total_breads_cooked -= count
+                    else:
+                        remaining = count - total_breads_cooked
+                        total_remaining_before += remaining * average_cook_time
+                        total_breads_cooked = 0
+
+        total_wait_s = total_remaining_before + cook_time_second + (full_round_time_min * 60)
+        return False, False, int(total_wait_s)
 
     # Scenario 2: Not enough breads
-    if bread_count > len(zitems):
-        how_many_left = bread_count - len(zitems)
-        left_breads_second = how_many_left * avrage_cook_time
+    if bread_count > len(this_ticket_breads):
+        how_many_left = bread_count - len(this_ticket_breads)
+        left_breads_second = how_many_left * average_cook_time
         return False, False, int(left_breads_second)
 
     # Scenario 3: Enough breads (or more)
-    last_bread_time = zitems[bread_count - 1]
+    last_bread_time = this_ticket_breads[bread_count - 1]
     if now >= last_bread_time:
         return True, False, None
     else:
         return False, True, int(last_bread_time - now)
+
 
 async def consume_ready_breads(r, bakery_id: int, current_user_detail: dict):
     """

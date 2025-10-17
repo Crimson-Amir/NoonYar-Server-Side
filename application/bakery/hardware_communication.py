@@ -141,6 +141,7 @@ async def current_ticket(
             return {"has_customer_in_queue": False}
         current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
 
+    time_per_bread = {k: int(v) for k, v in time_per_bread.items()}
     current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
     customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, current_ticket_id)
     time_per_bread, customer_reservations = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
@@ -372,38 +373,39 @@ async def new_bread(
     breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
     last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
     bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
-
+    last_bread_index_key = redis_helper.REDIS_KEY_LAST_BREAD_INDEX.format(bakery_id)
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.get(frt_key)
     pipe.zcard(breads_key)
     pipe.get(last_bread_time_key)
-    time_per_bread, frt_min, bread_count, last_bread_t = await pipe.execute()
+    pipe.get(last_bread_index_key)
+    time_per_bread, frt_min, bread_count, last_bread_time, last_bread_index = await pipe.execute()
 
     if not time_per_bread or not frt_min:
         raise ValueError('time_per_bread or full round trip is empty')
 
     time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
     avg_bread_time = sum(time_per_bread.values()) // len(time_per_bread)
-    bread_count = int(bread_count or 0)
-    frt_min = int(frt_min)
+    last_index = int(last_bread_index or 0)
+    frt_sec = int(frt_min) * 60
     now = datetime.now()
     now_ts = int(now.timestamp())
-    bread_cook_date = int((now + timedelta(minutes=avg_bread_time + frt_min)).timestamp())
-    bread_index = bread_count + 1
+    bread_cook_date = int((now + timedelta(seconds=avg_bread_time + frt_sec)).timestamp())
+    bread_index = last_index + 1
     ttl = seconds_until_midnight_iran()
 
     time_diff = None
 
-    if last_bread_t:
-        last_bread_t = int(float(last_bread_t))
-        time_diff = now_ts - last_bread_t
+    if last_bread_time:
+        last_bread_time = int(float(last_bread_time))
+        time_diff = now_ts - last_bread_time
 
     pipe = r.pipeline(transaction=True)
     pipe.set(last_bread_time_key, now_ts, ex=ttl)
     pipe.zadd(breads_key, {str(bread_cook_date): bread_index})
     pipe.expire(breads_key, ttl)
-
+    pipe.set(last_bread_index_key, bread_index, ex=ttl)
     if time_diff is not None:
         pipe.zadd(bread_diff_key, {str(bread_index): time_diff})
         pipe.expire(bread_diff_key, ttl)

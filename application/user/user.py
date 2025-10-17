@@ -31,7 +31,7 @@ async def home(request: Request):
 
 
 @router.get("/res/")
-# @handle_errors
+@handle_errors
 async def queue_check(request: Request, b: int, t: int):
     """Check the queue status for a bakery and a target reservation number."""
     data = await decode_access_token(request)
@@ -75,7 +75,7 @@ async def queue_check(request: Request, b: int, t: int):
 
     # Compute average bread time
     average_bread_time = sum(bread_time.values()) // len(bread_time)
-7
+
     # Prepare ordered list of time per bread (for algorithm)
     bread_ids_sorted = sorted(bread_time.keys())
     time_per_bread_list = [bread_time[k] for k in bread_ids_sorted]
@@ -98,17 +98,21 @@ async def queue_check(request: Request, b: int, t: int):
     ) * average_bread_time
 
     # Get user breads if exists
-    user_breads = None
+    user_breads_persian = user_breads = None
     if is_user_exist:
-        # Zip bread IDs with user's reserved bread counts
-        user_breads = {
+
+        user_breads_persian = {
             bread_names.get(bid, str(bid)): count
             for bid, count in zip(bread_ids_sorted, reservation_dict[reservation_number])
         }
+        user_breads = {
+            bid: count
+            for bid, count in zip(bread_ids_sorted, reservation_dict[reservation_number])
+        }
 
-    # Call your ready-status calculator
+
     ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
-        r, b, user_breads, bread_time
+        r, b, user_breads, bread_time, reservation_keys, reservation_number, reservation_dict
     )
 
     # Return final response
@@ -120,6 +124,6 @@ async def queue_check(request: Request, b: int, t: int):
         "people_in_queue": people_in_queue,
         "empty_slot_time_avg": empty_slot_time,
         "in_queue_customers_time": in_queue_customers_time,
-        "user_breads": user_breads,
+        "user_breads": user_breads_persian,
         "data": data
     }
