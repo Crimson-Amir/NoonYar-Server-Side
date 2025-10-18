@@ -66,15 +66,6 @@ async def get_customer_reservation(r, bakery_id, customer_id):
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
     return await r.hget(res_key, customer_id)
 
-
-async def get_customer_ticket_data_pipe_without_reservations(r, bakery_id):
-    time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
-    order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-    pipe1 = r.pipeline()
-    pipe1.zrange(order_key, 0, 0)
-    pipe1.hgetall(time_key)
-    return await pipe1.execute()
-
 async def get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
@@ -152,7 +143,6 @@ async def get_customer_reservation_detail(time_per_bread, counts) -> dict[str, i
 
     return {bid: count for bid, count in zip(bread_ids, counts)}
 
-
 LUA_ADD_RESERVATION = """
 
     local reservations = KEYS[1]
@@ -161,15 +151,21 @@ LUA_ADD_RESERVATION = """
     local ticket = ARGV[1]
     local value = ARGV[2]
     local score = tonumber(ARGV[1])
-    
+    local ttl = tonumber(ARGV[3])
+
     local ok = redis.call('HSETNX', reservations, ticket, value)
     if ok == 1 then
         redis.call('ZADD', order, score, ticket)
         redis.call('SET', last_ticket, ticket)
+        -- set TTLs on all related keys
+        redis.call('EXPIRE', reservations, ttl)
+        redis.call('EXPIRE', order, ttl)
+        redis.call('EXPIRE', last_ticket, ttl)
     end
-    
+
     return ok
 """
+
 
 
 async def add_customer_to_reservation_dict(
@@ -182,11 +178,11 @@ async def add_customer_to_reservation_dict(
 
     reservation = [bread_count_data.get(bid, 0) for bid in time_per_bread.keys()]
     encoded = ",".join(map(str, reservation))
-
+    ttl = seconds_until_midnight_iran()
     script = r.register_script(LUA_ADD_RESERVATION)
     result = await script(
         keys=[reservations_key, order_key, last_ticket_key],
-        args=[str(customer_id), encoded],
+        args=[str(customer_id), encoded, str(ttl)],
     )
 
     return result == 1
@@ -643,13 +639,13 @@ async def calculate_ready_status(
     full_round_time_min_raw, zitems_raw = await pipe.execute()
 
     # Convert results
-    full_round_time_min = int(full_round_time_min_raw or 0)
+    full_round_time_sec = int(full_round_time_min_raw) * 60
     zitems = [float(z) for z in zitems_raw]
 
     this_ticket_breads = zitems[breads_before : breads_before + bread_count]
 
     if not zitems:
-        total_wait_s = full_round_time_min * 60
+        total_wait_s = full_round_time_sec
         for key in reservation_keys:
             if key > reservation_number:
                 break
@@ -662,32 +658,43 @@ async def calculate_ready_status(
         return False, False, int(total_wait_s)
 
     if not this_ticket_breads:
-        cook_time_second = sum(count * time_per_bread[bread_id] for bread_id, count in current_user_detail.items())
+        cook_time_second = sum(
+            count * time_per_bread[bread_id]
+            for bread_id, count in current_user_detail.items()
+        )
 
         total_remaining_before = 0
         total_breads_cooked = len(zitems)
 
+        # iterate through people before this ticket
         for key in people_before:
             breads_for_person = reservation_dict[key]
-            for count in breads_for_person:
-                if total_breads_cooked <= 0:
-                    total_remaining_before += count * average_cook_time
-                else:
+            bread_ids = list(time_per_bread.keys())
+
+            for bread_id, count in zip(bread_ids, breads_for_person):
+                # Some breads already cooked
+                if total_breads_cooked > 0:
                     if count <= total_breads_cooked:
                         total_breads_cooked -= count
+                        continue
                     else:
                         remaining = count - total_breads_cooked
-                        total_remaining_before += remaining * average_cook_time
                         total_breads_cooked = 0
+                        # remaining part of this ticket: use average
+                        total_remaining_before += remaining * average_cook_time
+                else:
+                    # No breads cooked yet — this person's entire order is still waiting
+                    # Use accurate bread-specific time
+                    total_remaining_before += count * time_per_bread[bread_id]
 
-        total_wait_s = total_remaining_before + cook_time_second + (full_round_time_min * 60)
+        total_wait_s = total_remaining_before + cook_time_second + full_round_time_sec
         return False, False, int(total_wait_s)
 
     # Scenario 2: Not enough breads
     if bread_count > len(this_ticket_breads):
         how_many_left = bread_count - len(this_ticket_breads)
         left_breads_second = how_many_left * average_cook_time
-        return False, False, int(left_breads_second)
+        return False, False, int(left_breads_second) + full_round_time_sec
 
     # Scenario 3: Enough breads (or more)
     last_bread_time = this_ticket_breads[bread_count - 1]
@@ -697,12 +704,11 @@ async def calculate_ready_status(
         return False, True, int(last_bread_time - now)
 
 
-async def consume_ready_breads(r, bakery_id: int, current_user_detail: dict):
+async def consume_ready_breads(r, bakery_id: int, bread_count: int):
     """
     Remove breads used for the current ticket from Redis.
     """
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
-    bread_count = sum(current_user_detail.values())
 
     # Fetch first N breads (oldest / ready first)
     zitems = await r.zrange(breads_key, 0, bread_count - 1)

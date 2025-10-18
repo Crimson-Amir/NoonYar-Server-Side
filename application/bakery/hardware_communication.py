@@ -104,6 +104,9 @@ async def next_ticket(
         if any(bread in time_per_bread.keys() for bread in upcoming_breads):
             await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
             tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
+        bread_count = sum([int(x) for x in customer_reservation.split(',')])
+        removed = await redis_helper.consume_ready_breads(r, bakery_id, bread_count)
+        logger.info(f"Removed {removed} breads for ticket {customer_id}")
 
     time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservation)
     current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
@@ -133,31 +136,45 @@ async def current_ticket(
 
     r = request.app.state.redis
 
-    current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    pipe1 = r.pipeline()
+    pipe1.zrange(order_key, 0, 0)
+    pipe1.hgetall(time_key)
+    pipe1.hgetall(res_key)
+    current_ticket_id, time_per_bread, reservations_map = await pipe1.execute()
+
     if not current_ticket_id:
-        reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
-        if not reservation_list:
-            await mqtt_client.update_has_customer_in_queue(request, bakery_id, False)
-            return {"has_customer_in_queue": False}
-        current_ticket_id, time_per_bread = await redis_helper.get_customer_ticket_data_pipe_without_reservations(r, bakery_id)
+        await mqtt_client.update_has_customer_in_queue(request, bakery_id, False)
+        return {"has_customer_in_queue": False}
+
+    if not time_per_bread:
+        raise HTTPException(status_code=404, detail={"error": "empty bread type"})
+
+    if not reservations_map:
+        raise HTTPException(status_code=404, detail={"error": "reservation is empty"})
 
     time_per_bread = {k: int(v) for k, v in time_per_bread.items()}
-    current_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, current_ticket_id)
-    customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, current_ticket_id)
-    time_per_bread, customer_reservations = await redis_helper.get_current_cusomter_detail(r, bakery_id, current_ticket_id, time_per_bread, customer_reservation)
-    current_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservations)
-    ready, _, wait_until = await redis_helper.calculate_ready_status(r, bakery_id, current_user_detail, time_per_bread)
+    current_ticket_id = int(current_ticket_id[0])
+    reservation_dict = {
+        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
+    }
+    reservation_keys = sorted(reservation_dict.keys())
+    bread_ids_sorted = sorted(time_per_bread.keys())
 
-    if ready:
-        removed = await redis_helper.consume_ready_breads(r, bakery_id, current_user_detail)
-        logger.info(f"Removed {removed} breads for ticket {current_ticket_id}")
+    user_breads = {bid: count for bid, count in zip(bread_ids_sorted, reservation_dict[current_ticket_id])}
+
+    ready, _, wait_until = await redis_helper.calculate_ready_status(
+        r, bakery_id, user_breads, time_per_bread, reservation_keys, current_ticket_id, reservation_dict
+    )
 
     return {
         "ready": ready,
         "wait_until": wait_until,
         "has_customer_in_queue": True,
         "current_ticket_id": current_ticket_id,
-        "current_user_detail": current_user_detail
+        "current_user_detail": user_breads
     }
 
 
@@ -177,15 +194,31 @@ async def skip_ticket(
     customer_id = ticket.customer_ticket_id
     r = request.app.state.redis
 
-    status, customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
-    if not status:
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+
+    current_ticket_id_raw = await r.zrange(order_key, 0, 0)
+    current_ticket_id = int(current_ticket_id_raw[0])
+
+    if not current_ticket_id:
+        endpoint_helper.raise_empty_queue_exception()
+
+    await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
+
+    pipe = r.pipeline()
+    pipe.hget(res_key, str(customer_id))
+    pipe.hdel(res_key, customer_id)
+    pipe.zrem(order_key, customer_id)
+    current_customer_reservation, r1, r2 = await pipe.execute()
+
+    if not bool(r1 and r2):
         reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
         if not reservation_list:
             endpoint_helper.raise_empty_queue_exception()
-        status, customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
+        status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
         if not status: raise HTTPException(status_code=401, detail="invalid customer_id")
 
-    await redis_helper.add_customer_to_skipped_customers(r, bakery_id, customer_id, reservations_str=customer_reservation)
+    await redis_helper.add_customer_to_skipped_customers(r, bakery_id, customer_id, reservations_str=current_customer_reservation)
 
     next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(r, bakery_id)
     next_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, next_ticket_id, return_error=False)
@@ -201,6 +234,9 @@ async def skip_ticket(
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
         tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
 
+    bread_count = sum([int(x) for x in current_customer_reservation.split(',')])
+    removed = await redis_helper.consume_ready_breads(r, bakery_id, bread_count)
+    logger.info(f"Removed {removed} breads for ticket {customer_id}")
     logger.info(f"{FILE_NAME}:skip_ticket", extra={"bakery_id": bakery_id, "customer_id": customer_id})
     return {
         "next_ticket_id": next_ticket_id,
@@ -368,30 +404,24 @@ async def new_bread(
 
     r = request.app.state.redis
 
-    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
     breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
     last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
     bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
     last_bread_index_key = redis_helper.REDIS_KEY_LAST_BREAD_INDEX.format(bakery_id)
     pipe = r.pipeline()
-    pipe.hgetall(time_key)
     pipe.get(frt_key)
     pipe.zcard(breads_key)
     pipe.get(last_bread_time_key)
     pipe.get(last_bread_index_key)
-    time_per_bread, frt_min, bread_count, last_bread_time, last_bread_index = await pipe.execute()
+    frt_min, bread_count, last_bread_time, last_bread_index = await pipe.execute()
 
-    if not time_per_bread or not frt_min:
-        raise ValueError('time_per_bread or full round trip is empty')
 
-    time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
-    avg_bread_time = sum(time_per_bread.values()) // len(time_per_bread)
     last_index = int(last_bread_index or 0)
     frt_sec = int(frt_min) * 60
     now = datetime.now()
     now_ts = int(now.timestamp())
-    bread_cook_date = int((now + timedelta(seconds=avg_bread_time + frt_sec)).timestamp())
+    bread_cook_date = int((now + timedelta(seconds=frt_sec)).timestamp())
     bread_index = last_index + 1
     ttl = seconds_until_midnight_iran()
 
