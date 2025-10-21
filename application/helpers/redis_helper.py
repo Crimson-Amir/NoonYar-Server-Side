@@ -680,23 +680,20 @@ async def calculate_ready_status(
                     else:
                         remaining = count - total_breads_cooked
                         total_breads_cooked = 0
-                        # remaining part of this ticket: use average
                         total_remaining_before += remaining * average_cook_time
                 else:
-                    # No breads cooked yet — this person's entire order is still waiting
-                    # Use accurate bread-specific time
                     total_remaining_before += count * time_per_bread[bread_id]
 
         total_wait_s = total_remaining_before + cook_time_second + full_round_time_sec
         return False, False, int(total_wait_s)
 
-    # Scenario 2: Not enough breads
     if bread_count > len(this_ticket_breads):
+        breads_cook_time = [time_per_bread[bread_type] for bread_type, count in current_user_detail.items() if count > 0]
+        this_ticket_average_cook_time = sum(breads_cook_time) // len(breads_cook_time)
         how_many_left = bread_count - len(this_ticket_breads)
-        left_breads_second = how_many_left * average_cook_time
+        left_breads_second = how_many_left * this_ticket_average_cook_time
         return False, False, int(left_breads_second) + full_round_time_sec
 
-    # Scenario 3: Enough breads (or more)
     last_bread_time = this_ticket_breads[bread_count - 1]
     if now >= last_bread_time:
         return True, False, None
