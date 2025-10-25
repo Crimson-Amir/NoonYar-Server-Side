@@ -1,5 +1,4 @@
-from fastapi import APIRouter
-from fastapi import Request
+from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from application.helpers import endpoint_helper, redis_helper
 from application.algorithm import Algorithm
@@ -68,6 +67,10 @@ async def queue_check(request: Request, b: int, t: int):
 
     # Determine if target user exists
     is_user_exist = t in reservation_keys
+
+    if not is_user_exist:
+        raise HTTPException(status_code=403, detail="Bread does not Exist")
+
     reservation_number = t if is_user_exist else reservation_keys[-1]
 
     # Count people before the user in queue
@@ -120,7 +123,6 @@ async def queue_check(request: Request, b: int, t: int):
         "ready": ready,
         "accurate_time": accurate_time,
         "wait_until": wait_until,
-        "is_user_exists": is_user_exist,
         "people_in_queue": people_in_queue,
         "empty_slot_time_avg": empty_slot_time,
         "in_queue_customers_time": in_queue_customers_time,
