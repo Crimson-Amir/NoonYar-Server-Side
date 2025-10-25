@@ -90,14 +90,14 @@ class Customer(Base):
     __tablename__ = 'customer'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    hardware_customer_id = Column(Integer, nullable=False)
+    ticket_id = Column(Integer, nullable=False)
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'))
     is_in_queue = Column(Boolean, nullable=False)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
-    skipped_associations = relationship("SkippedCustomer", back_populates="customer", cascade="all, delete-orphan")
+    wait_list_associations = relationship("Wait_list", back_populates="customer", cascade="all, delete-orphan")
     upcoming_associations = relationship("UpcomingCustomer", back_populates="customer", cascade="all, delete-orphan")
     bakery = relationship("Bakery", back_populates="customers")
 
@@ -122,14 +122,14 @@ class UserCustomer(Base):
     user = relationship("User", back_populates="customer_associations")
     customer = relationship("Customer", back_populates="user_associations")
 
-class SkippedCustomer(Base):
-    __tablename__ = 'skipped_customer'
+class WaitList(Base):
+    __tablename__ = 'wait_list'
 
     customer_id = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), primary_key=True)
     is_in_queue = Column(Boolean, nullable=False)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
-    customer = relationship("Customer", back_populates="skipped_associations")
+    customer = relationship("Customer", back_populates="wait_list_associations")
 
 class UpcomingCustomer(Base):
     __tablename__ = 'upcoming_customer'

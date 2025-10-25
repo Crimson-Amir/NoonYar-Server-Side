@@ -73,9 +73,9 @@ def create_user(db: Session, user: schemas.SignUpRequirement):
     return db_user
 
 
-def new_customer_no_commit(db: Session, hardware_customer_id, bakery_id, is_in_queue):
+def new_customer_no_commit(db: Session, ticket_id, bakery_id, is_in_queue):
     customer = models.Customer(
-        hardware_customer_id=hardware_customer_id,
+        ticket_id=ticket_id,
         bakery_id=bakery_id,
         is_in_queue=is_in_queue,
     )
@@ -105,10 +105,10 @@ def new_customer_to_upcoming_customers(db: Session, customer_id):
     db.add(upcoming_customer)
     return upcoming_customer
 
-def update_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
+def update_customers_status(db: Session, ticket_id: int, bakery_id: int, new_status: bool):
     stmt = (
         update(models.Customer)
-        .where(models.Customer.hardware_customer_id <= hardware_customer_id)
+        .where(models.Customer.ticket_id <= ticket_id)
         .where(models.Customer.bakery_id == bakery_id)
         .values(is_in_queue=new_status)
         .returning(models.Customer.id)
@@ -227,7 +227,7 @@ def remove_upcoming_customer(db: Session, customer_ticket_id: int, bakery_id: in
         .join(models.Customer)
         .filter(
             models.Customer.bakery_id == bakery_id,
-            models.Customer.hardware_customer_id == customer_ticket_id
+            models.Customer.ticket_id == customer_ticket_id
         )
         .first()
     )
@@ -311,13 +311,13 @@ def edit_bread_names(db: Session, bread_type_and_new_name: dict):
     db.execute(stmt)
     db.commit()
 
-def add_new_skipped_customer(db: Session, customer_id, is_in_queue=True):
-    new_entry = models.SkippedCustomer(customer_id=customer_id, is_in_queue=is_in_queue)
+def add_new_ticket_to_wait_list(db: Session, customer_id, is_in_queue=True):
+    new_entry = models.WaitList(customer_id=customer_id, is_in_queue=is_in_queue)
     db.add(new_entry)
     db.commit()
     return new_entry
 
-def get_today_skipped_customers(db: Session, bakery_id: int):
+def get_today_wait_list(db: Session, bakery_id: int):
     tehran = pytz.timezone('Asia/Tehran')
     now_tehran = datetime.now(tehran)
     midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
@@ -325,26 +325,26 @@ def get_today_skipped_customers(db: Session, bakery_id: int):
 
     stmt = (
         select(models.Customer)
-        .join(models.Customer.skipped_associations)  # join via relationship
-        .where(models.SkippedCustomer.is_in_queue.is_(True),
+        .join(models.Customer.wait_list_associations)  # join via relationship
+        .where(models.WaitList.is_in_queue.is_(True),
                models.Customer.register_date >= midnight_utc,
                models.Customer.bakery_id == bakery_id)
     )
 
     return db.execute(stmt).scalars().all()
 
-def update_skipped_customers_status(db: Session, hardware_customer_id: int, bakery_id: int, new_status: bool):
+def update_wait_list_customer_status(db: Session, ticket_id: int, bakery_id: int, new_status: bool):
     customer_subq = (
         select(models.Customer.id)
         .where(
-            models.Customer.hardware_customer_id == hardware_customer_id,
+            models.Customer.ticket_id == ticket_id,
             models.Customer.bakery_id == bakery_id
         )
     )
 
     stmt = (
-        update(models.SkippedCustomer)
-        .where(models.SkippedCustomer.customer_id.in_(customer_subq))
+        update(models.WaitList)
+        .where(models.WaitList.customer_id.in_(customer_subq))
         .values(is_in_queue=new_status)
     )
 

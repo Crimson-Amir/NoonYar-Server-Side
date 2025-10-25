@@ -92,18 +92,18 @@ def next_ticket_process(self, hardware_customer_id, bakery_id):
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def skipped_ticket_proccess(self, hardware_customer_id, bakery_id):
+def serve_wait_list_ticket(self, hardware_customer_id, bakery_id):
     with session_scope() as db:
-        crud.update_skipped_customers_status(db, hardware_customer_id, bakery_id, False)
+        crud.update_wait_list_customer_status(db, hardware_customer_id, bakery_id, False)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def skip_customer(self, hardware_customer_id, bakery_id):
+def send_ticket_to_wait_list(self, hardware_customer_id, bakery_id):
     with session_scope() as db:
         customer = crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
         customer_id = max(row[0] for row in customer)
-        crud.add_new_skipped_customer(db, customer_id, True)
+        crud.add_new_ticket_to_wait_list(db, customer_id, True)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
