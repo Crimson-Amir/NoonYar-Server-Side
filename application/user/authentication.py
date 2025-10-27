@@ -4,7 +4,6 @@ from application import tasks, crud, schemas
 from application.setting import settings
 from sqlalchemy.orm import Session
 from application.auth import create_access_token, create_refresh_token, decode_token
-from application.database import SessionLocal
 from datetime import timedelta
 from application.logger_config import logger
 import random, time
@@ -19,14 +18,9 @@ router = APIRouter(
     tags=['authentication']
 )
 
-def get_db():
-    db = SessionLocal()
-    try: yield db
-    finally: db.close()
-
 @router.post('/sign-up/')
 @handle_errors
-async def create_user(user: schemas.SignUpRequirement, request: Request, response: Response, temporary_sign_up_token: str = Cookie(None), db: Session = Depends(get_db)):
+async def create_user(user: schemas.SignUpRequirement, request: Request, response: Response, temporary_sign_up_token: str = Cookie(None), db: Session = Depends(endpoint_helper.get_db)):
     if not temporary_sign_up_token:
         raise HTTPException(status_code=400, detail="No token found")
 
@@ -80,7 +74,7 @@ def generate_otp():
 
 @router.post('/enter-number')
 @handle_errors
-async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get_db)):
+async def enter_number(user: schemas.LogInRequirement):
     phone = user.phone_number.strip()
     if not phone.startswith("09") or len(phone) != 11 or not phone.isdigit():
         raise HTTPException(
@@ -96,7 +90,7 @@ async def enter_number(user: schemas.LogInRequirement, db: Session = Depends(get
 
 @router.post('/verify-otp')
 @handle_errors
-async def verify_otp(request: Request, response: Response, data: schemas.VerifyOTPRequirement, db: Session = Depends(get_db)):
+async def verify_otp(request: Request, response: Response, data: schemas.VerifyOTPRequirement, db: Session = Depends(endpoint_helper.get_db)):
     otp_store = token_helpers.OTPStore(request.app.state.redis)
 
     if not await otp_store.verify_otp(data.phone_number, data.code):

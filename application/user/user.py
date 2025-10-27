@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
-from application.helpers import endpoint_helper, redis_helper
+from application.helpers import endpoint_helper, redis_helper, token_helpers
 from application.algorithm import Algorithm
-from application.setting import settings
-import jwt
+from application.auth import decode_token
 
 router = APIRouter(
     prefix='',
@@ -13,19 +12,13 @@ router = APIRouter(
 FILE_NAME = "user:user"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 
-async def decode_access_token(request):
-    data = request.cookies.get('access_token')
-    if not data: return
-    decode_data = jwt.decode(data, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-    return decode_data
-
 @router.get('/')
 async def root(): return RedirectResponse('/home')
 
 @router.api_route('/home', methods=['POST', 'GET'])
 @handle_errors
 async def home(request: Request):
-    data = await decode_access_token(request)
+    data = decode_token(request)
     return {'status': 'OK', 'data': data}
 
 
@@ -33,7 +26,8 @@ async def home(request: Request):
 @handle_errors
 async def queue_check(request: Request, b: int, t: int):
     """Check the queue status for a bakery and a target reservation number."""
-    data = await decode_access_token(request)
+    access_token = request.cookies.get('access_token')
+    data = decode_token(access_token)
     r = request.app.state.redis
 
     # Redis keys

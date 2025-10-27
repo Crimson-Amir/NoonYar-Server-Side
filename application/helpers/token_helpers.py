@@ -1,7 +1,8 @@
-import hashlib, datetime
+import hashlib, datetime, jwt
 from application import crud
 from application.database import SessionLocal
 import logging
+from application.setting import settings
 
 logging.getLogger("application")
 bakery_token = {}

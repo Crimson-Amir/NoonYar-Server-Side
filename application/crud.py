@@ -69,7 +69,6 @@ def create_user(db: Session, user: schemas.SignUpRequirement):
     )
     db.add(db_user)
     db.commit()
-    db.refresh(db_user)
     return db_user
 
 

@@ -5,7 +5,6 @@ from hashlib import md5
 from fastapi import HTTPException
 from application.setting import settings
 
-
 def create_access_token(data: dict, expires_delta: timedelta = timedelta(minutes=settings.ACCESS_TOKEN_EXP_MIN)):
     to_encode = data.copy()
     expire = datetime.now() + expires_delta
