@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: int
     ERR_THREAD_ID: int
     NEW_USER_THREAD_ID: int
+    INFO_THREAD_ID: int
     HARDWARE_CLIENT_ERROR_THREAD_ID: int
 
     # SMS

@@ -294,7 +294,7 @@ def register_new_admin(db: Session, user_id: int, active: bool):
     return new_admin
 
 def remove_admin(db: Session, admin_id: int):
-    admin = db.query(models.Admin).filter(models.Admin.id == admin_id).first()
+    admin = db.query(models.Admin).filter(models.Admin.admin_id == admin_id).first()
     if not admin:
         return None
     db.delete(admin)

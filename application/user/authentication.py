@@ -55,7 +55,7 @@ async def create_user(user: schemas.SignUpRequirement, request: Request, respons
     user_agent = request.headers.get("user-agent")
 
     extra = {"phone_number": user.phone_number, "first_name": user.first_name,
-              'last_name': user.last_name, 'password': user.password,
+              'last_name': user.last_name, 'user_id': create_user_db.user_id, 'password': user.password,
               "ip_address": client_ip, "user_agent": user_agent}
 
     logger.info(f"{FILE_NAME}:create_user", extra=extra)
@@ -114,7 +114,21 @@ async def verify_otp(request: Request, response: Response, data: schemas.VerifyO
         cr_refresh_token = create_refresh_token(data=user_data)
         set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
         set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
+
+        client_ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+
+        message = (f"🔵 New User Loged In!"
+                   f"\n\nUserID: {db_user.user_id}"
+                   f"\nFirst Name: {db_user.first_name}"
+                   f"\nLast Name: {db_user.last_name}"
+                   f"\nPhone Number: {db_user.phone_number}"
+                   f"\nClient IP: {client_ip}"
+                   f"\nUser Agent: {user_agent}")
+
+        tasks.report_to_admin_api.delay(message, message_thread_id=settings.INFO_THREAD_ID)
         step = 'login'
+
 
     logger.info(f"{FILE_NAME}:verify_otp:{step}", extra={"phone_number": data.phone_number, "code": data.code})
     return {'status': 'OK', 'step': step}
