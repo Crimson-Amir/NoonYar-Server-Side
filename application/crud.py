@@ -33,6 +33,11 @@ def get_bakery_breads(db: Session, bakery_id: int):
 def get_bakery(db: Session, bakery_id: int):
     return db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_id).first()
 
+
+def get_first_admin(db: Session):
+    return db.query(models.Admin).first()
+
+
 def get_bakery_bread(db: Session, bakery_id: int, bread_id: int):
     return db.query(models.BakeryBread).filter(
         models.BakeryBread.bakery_id == bakery_id,
@@ -281,8 +286,8 @@ def get_bakery_upcoming_customers(db: Session, bakery_id: int):
         ).all()
     )
 
-def register_new_admin(db: Session, admin: schemas.NewAdminRequirement):
-    new_admin = models.Admin(user_id=admin.user_id, active=admin.status)
+def register_new_admin(db: Session, user_id: int, active: bool):
+    new_admin = models.Admin(user_id=user_id, active=active)
     db.add(new_admin)
     db.commit()
     db.refresh(new_admin)

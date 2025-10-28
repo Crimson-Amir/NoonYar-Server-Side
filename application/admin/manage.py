@@ -33,29 +33,19 @@ def require_admin(
 @router.post('/new', response_model=schemas.NewAdminResult)
 @handle_errors
 async def new_admin(admin: schemas.NewAdminRequirement, db: Session = Depends(endpoint_helper.get_db), _: int = Depends(require_admin)):
-    try:
-        new = crud.register_new_admin(db, admin)
-        logger.info(f"{FILE_NAME}:new_admin", extra={"user_id": admin.user_id, "status": admin.status})
-        return new
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    new = crud.register_new_admin(db, admin.user_id, admin.status)
+    logger.info(f"{FILE_NAME}:new_admin", extra={"user_id": admin.user_id, "status": admin.status})
+    return new
 
 @router.delete('/remove/{admin_id}')
 @handle_errors
 async def remove_admin(admin_id: int, db: Session = Depends(endpoint_helper.get_db), _: int = Depends(require_admin)):
-    try:
-        result = crud.remove_admin(db, admin_id)
-        if result:
-            logger.info(f"{FILE_NAME}:remove_admin", extra={"admin_id": admin_id})
-            return {"status": "admin removed!"}
+    result = crud.remove_admin(db, admin_id)
+    if result:
+        logger.info(f"{FILE_NAME}:remove_admin", extra={"admin_id": admin_id})
+        return {"status": "admin removed!"}
 
-        raise HTTPException(
-            status_code=404,
-            detail="Admin ID does not exist"
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+    raise HTTPException(
+        status_code=404,
+        detail="Admin ID does not exist"
+    )
