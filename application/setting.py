@@ -5,8 +5,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str
 
     # Auth
-    SECRET_KEY: str
-    REFRESH_SECRET_KEY: str
+    ACCESS_TOKEN_SECRET_KEY: str
+    REFRESH_TOKEN_SECRET_KEY: str
     ALGORITHM: str
     SIGN_UP_TEMPORARY_TOKEN_EXP_MIN: int
     ACCESS_TOKEN_EXP_MIN: int

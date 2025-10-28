@@ -6,7 +6,8 @@ from application.database import SessionLocal
 from application.setting import settings
 import traceback, redis
 from uuid import uuid4
-from application.helpers import token_helpers, redis_helper
+from application.auth import OTPStore
+from application.helpers import redis_helper
 from redis import asyncio as aioredis
 import asyncio
 from contextlib import contextmanager
@@ -127,7 +128,7 @@ def send_otp(self, mobile_number, code, expire_m=10):
             decode_responses=True
         )
         try:
-            otp_store = token_helpers.OTPStore(r)
+            otp_store = OTPStore(r)
             otp_store.set_otp(mobile_number, code, expire_m * 60)
         finally:
             r.close()

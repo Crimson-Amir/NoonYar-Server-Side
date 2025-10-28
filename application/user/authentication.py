@@ -3,11 +3,11 @@ from fastapi.responses import RedirectResponse
 from application import tasks, crud, schemas
 from application.setting import settings
 from sqlalchemy.orm import Session
-from application.auth import create_access_token, create_refresh_token, decode_token
+from application.auth import create_access_token, create_refresh_token, decode_token, OTPStore, TokenBlacklist, set_cookie
 from datetime import timedelta
 from application.logger_config import logger
 import random, time
-from application.helpers import endpoint_helper, token_helpers
+from application.helpers import endpoint_helper
 
 FILE_NAME = "user:authentication"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
@@ -46,8 +46,8 @@ async def create_user(user: schemas.SignUpRequirement, request: Request, respons
     access_token = create_access_token(data=user_data)
     cr_refresh_token = create_refresh_token(data=user_data)
 
-    token_helpers.set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
-    token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
+    set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
 
     response.delete_cookie("temporary_sign_up_token")
 
@@ -91,7 +91,7 @@ async def enter_number(user: schemas.LogInRequirement):
 @router.post('/verify-otp')
 @handle_errors
 async def verify_otp(request: Request, response: Response, data: schemas.VerifyOTPRequirement, db: Session = Depends(endpoint_helper.get_db)):
-    otp_store = token_helpers.OTPStore(request.app.state.redis)
+    otp_store = OTPStore(request.app.state.redis)
 
     if not await otp_store.verify_otp(data.phone_number, data.code):
         raise HTTPException(status_code=400, detail="OTP not found or incorrect")
@@ -103,7 +103,7 @@ async def verify_otp(request: Request, response: Response, data: schemas.VerifyO
             data={"phone_number": data.phone_number, "purpose": "signup"},
             expires_delta=timedelta(minutes=settings.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN)
         )
-        token_helpers.set_cookie(response, "temporary_sign_up_token", token, settings.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
+        set_cookie(response, "temporary_sign_up_token", token, settings.SIGN_UP_TEMPORARY_TOKEN_EXP_MIN * 60)
         step = 'sign-up'
     else:
         user_data = {
@@ -112,8 +112,8 @@ async def verify_otp(request: Request, response: Response, data: schemas.VerifyO
         }
         access_token = create_access_token(data=user_data)
         cr_refresh_token = create_refresh_token(data=user_data)
-        token_helpers.set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
-        token_helpers.set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
+        set_cookie(response, "access_token", access_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
+        set_cookie(response, "refresh_token", cr_refresh_token, settings.REFRESH_TOKEN_EXP_MIN * 60)
         step = 'login'
 
     logger.info(f"{FILE_NAME}:verify_otp:{step}", extra={"phone_number": data.phone_number, "code": data.code})
@@ -129,7 +129,7 @@ async def logout_successful():
 @handle_errors
 async def logout(request: Request):
     redirect = RedirectResponse('/auth/logout-successful', status_code=303)
-    blacklist = token_helpers.TokenBlacklist(request.app.state.redis)
+    blacklist = TokenBlacklist(request.app.state.redis)
 
     # Access token
     access_token = request.cookies.get("access_token")
@@ -142,7 +142,7 @@ async def logout(request: Request):
     # Refresh token
     refresh_token = request.cookies.get("refresh_token")
     if refresh_token:
-        payload = decode_token(refresh_token, settings.REFRESH_SECRET_KEY)
+        payload = decode_token(refresh_token, settings.REFRESH_TOKEN_SECRET_KEY)
         exp = payload.get("exp")
         ttl = max(1, exp - int(time.time())) if exp else settings.REFRESH_TOKEN_EXP_MIN * 60
         await blacklist.add(refresh_token, ttl)
