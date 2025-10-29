@@ -289,17 +289,17 @@ async def get_upcoming_customer(
 
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-    frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+    baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
     upcoming_breads_key = redis_helper.REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
-    pipe.get(frt_key)
+    pipe.get(baking_time_key)
     pipe.zrange(order_key, 0, -1)
     pipe.smembers(upcoming_breads_key)
-    time_per_bread, reservations_map, frt_min, order_ids, upcoming_breads = await pipe.execute()
+    time_per_bread, reservations_map, baking_time_s_raw, order_ids, upcoming_breads = await pipe.execute()
 
     if time_per_bread:
         time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
@@ -316,7 +316,7 @@ async def get_upcoming_customer(
     
     counts = [int(x) for x in reservation_str.split(',')]
     keys = [int(x) for x in order_ids]
-    full_round_time_min = int(frt_min) if frt_min else 0
+    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
 
     upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
 
@@ -333,10 +333,9 @@ async def get_upcoming_customer(
 
     empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict) * max_bread_time)
     delivery_time_s = in_queue_time + empty_slot_time
-    cook_time_s = alg.compute_bread_time(time_per_bread_list, counts)
+    preparation_time = alg.compute_bread_time(time_per_bread_list, counts)
 
-    full_round_time_s = full_round_time_min * 60
-    notification_lead_time_s = cook_time_s + full_round_time_s
+    notification_lead_time_s = preparation_time + baking_time_s
     is_ready = delivery_time_s <= notification_lead_time_s
 
     response = {
@@ -354,10 +353,10 @@ async def get_upcoming_customer(
         response['customer_id'] = customer_id
         response["breads"] = upcoming_customer_breads
         response['ready_to_show'] = True
-        response['cook_time_s'] = cook_time_s
+        response['preparation_time'] = preparation_time
 
         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
-            r, bakery_id, customer_id, cook_time_s
+            r, bakery_id, customer_id, preparation_time
         )
         tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
 
@@ -400,24 +399,24 @@ async def new_bread(
 
     r = request.app.state.redis
 
-    frt_key = redis_helper.REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+    baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
     breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
     last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
     bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
     last_bread_index_key = redis_helper.REDIS_KEY_LAST_BREAD_INDEX.format(bakery_id)
     pipe = r.pipeline()
-    pipe.get(frt_key)
+    pipe.get(baking_time_key)
     pipe.zcard(breads_key)
     pipe.get(last_bread_time_key)
     pipe.get(last_bread_index_key)
-    frt_min, bread_count, last_bread_time, last_bread_index = await pipe.execute()
+    baking_time_s_raw, bread_count, last_bread_time, last_bread_index = await pipe.execute()
 
 
     last_index = int(last_bread_index or 0)
-    frt_sec = int(frt_min) * 60
+    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
     now = datetime.now()
     now_ts = int(now.timestamp())
-    bread_cook_date = int((now + timedelta(seconds=frt_sec)).timestamp())
+    bread_cook_date = int((now + timedelta(seconds=baking_time_s)).timestamp())
     bread_index = last_index + 1
     ttl = seconds_until_midnight_iran()
 

@@ -40,6 +40,7 @@ class AddBakery(BaseModel):
     name: str
     location: str
     active: bool = True
+    baking_time_s: int = 600
 
 class ModifyBakery(BakeryID):
     active: bool
@@ -59,7 +60,7 @@ class ModifyBread(BaseModel):
     active: bool
 
 class ModifySingleBreadToBakery(BreadID, BakeryID):
-    cook_time_s: int
+    preparation_time: int
 
 class NewAdminRequirement(UserID):
     status: bool = True

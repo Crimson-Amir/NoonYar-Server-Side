@@ -14,7 +14,7 @@ REDIS_KEY_LAST_KEY = f"{REDIS_KEY_PREFIX}:last_ticket"
 REDIS_KEY_UPCOMING_BREADS = f"{REDIS_KEY_PREFIX}:upcoming_breads"
 REDIS_KEY_UPCOMING_CUSTOMERS = f"{REDIS_KEY_PREFIX}:upcoming_customers"
 REDIS_KEY_CURRENT_UPCOMING_CUSTOMER = f"{REDIS_KEY_PREFIX}:current_upcoming_customer"
-REDIS_KEY_FULL_ROUND_TIME_MIN = f"{REDIS_KEY_PREFIX}:full_round_time_min"
+REDIS_KEY_BAKING_TIME_S = f"{REDIS_KEY_PREFIX}:baking_time_s"
 REDIS_KEY_TIMEOUT_SEC = f"{REDIS_KEY_PREFIX}:timeout_sec"
 REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
 REDIS_KEY_LAST_BREAD_TIME = f"{REDIS_KEY_PREFIX}:last_bread_time"
@@ -203,7 +203,7 @@ async def reset_bakery_metadata(r, bakery_id: int):
 
     with SessionLocal() as db:
         bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
-        time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
+        time_per_bread = {str(bread.bread_type_id): bread.preparation_time for bread in bakery_breads}
 
         pipe = r.pipeline()
         pipe.delete(time_key)
@@ -329,7 +329,7 @@ async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True
 
 async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=True):
     """
-    Fetch bread_type_id -> cook_time_s mapping for a bakery.
+    Fetch bread_type_id -> preparation_time mapping for a bakery.
     Stored in Redis as a HASH: HSET bakery:{id}:time_per_bread {bread_id} {time}
     """
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -342,7 +342,7 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
     with SessionLocal() as db:
 
         bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
-        time_per_bread = {str(bread.bread_type_id): int(bread.cook_time_s) for bread in bakery_breads}
+        time_per_bread = {str(bread.bread_type_id): int(bread.preparation_time) for bread in bakery_breads}
         pipe = r.pipeline()
         pipe.delete(time_key)
 
@@ -359,7 +359,7 @@ async def get_bakery_time_per_bread(r, bakery_id: int, fetch_from_redis_first=Tr
 def reset_time_per_bread_sync(r, db, bakery_id: int):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     bakery_breads = crud.get_active_bakery_breads(db, bakery_id)
-    time_per_bread = {str(bread.bread_type_id): bread.cook_time_s for bread in bakery_breads}
+    time_per_bread = {str(bread.bread_type_id): bread.preparation_time for bread in bakery_breads}
     pipe = r.pipeline()
     pipe.delete(time_key)
 
@@ -500,8 +500,8 @@ async def maybe_add_customer_to_upcoming_zset(
     
  
 
-async def get_full_round_time_min(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
-    key = REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+async def get_baking_time_s(r, bakery_id: int, fetch_from_redis_first: bool = True) -> int:
+    key = REDIS_KEY_BAKING_TIME_S.format(bakery_id)
     if fetch_from_redis_first:
         val = await r.get(key)
         if val is not None:
@@ -512,7 +512,7 @@ async def get_full_round_time_min(r, bakery_id: int, fetch_from_redis_first: boo
 
     with SessionLocal() as db:
         bakery = crud.get_bakery(db, bakery_id)
-        value = bakery.full_round_time_min
+        value = bakery.baking_time_s
         pipe.set(key, value)
         
     ttl = seconds_until_midnight_iran()
@@ -575,11 +575,11 @@ async def remove_customer_from_upcoming_customers(r, bakery_id, customer_id):
     zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
     await r.zrem(zkey, customer_id)
 
-async def remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(r, bakery_id, customer_id, cook_time_s):
+async def remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(r, bakery_id, customer_id, preparation_time):
     cur_key = REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
     zkey = REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
     pipe = r.pipeline()
-    pipe.setex(cur_key, cook_time_s, customer_id)
+    pipe.setex(cur_key, preparation_time, customer_id)
     pipe.zrem(zkey, customer_id)
     await pipe.execute()
 
@@ -590,7 +590,7 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False)
     await get_bakery_upcoming_breads(r, bakery_id, fetch_from_redis_first=False)
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
-    await get_full_round_time_min(r, bakery_id, fetch_from_redis_first=False)
+    await get_baking_time_s(r, bakery_id, fetch_from_redis_first=False)
     await get_timeout_second(r, bakery_id, fetch_from_redis_first=False)
     # TODO: REMOVE CURRENT_CUSTOMER HERE
 
@@ -607,7 +607,7 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_UPCOMING_BREADS.format(bakery_id),
         REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id),
         REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id),
-        REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id),
+        REDIS_KEY_BAKING_TIME_S.format(bakery_id),
         REDIS_KEY_TIMEOUT_SEC.format(bakery_id),
     ]
 
@@ -622,7 +622,7 @@ async def calculate_ready_status(
         reservation_keys: list, reservation_number: int, reservation_dict: dict
 ):
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
-    full_round_key = REDIS_KEY_FULL_ROUND_TIME_MIN.format(bakery_id)
+    baking_time_key = REDIS_KEY_BAKING_TIME_S.format(bakery_id)
 
     people_before = [key for key in reservation_keys if key < reservation_number]
     breads_before = sum(sum(reservation_dict[k]) for k in people_before)
@@ -634,18 +634,18 @@ async def calculate_ready_status(
 
     # --- Single pipeline ---
     pipe = r.pipeline()
-    pipe.get(full_round_key)
+    pipe.get(baking_time_key)
     pipe.zrange(breads_key, 0, total_needed_breads - 1)
-    full_round_time_min_raw, zitems_raw = await pipe.execute()
+    baking_time_s_raw, zitems_raw = await pipe.execute()
 
     # Convert results
-    full_round_time_sec = int(full_round_time_min_raw) * 60
+    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
     zitems = [float(z) for z in zitems_raw]
 
     this_ticket_breads = zitems[breads_before : breads_before + bread_count]
 
     if not zitems:
-        total_wait_s = full_round_time_sec
+        total_wait_s = baking_time_s
         for key in reservation_keys:
             if key > reservation_number:
                 break
@@ -658,7 +658,7 @@ async def calculate_ready_status(
         return False, False, int(total_wait_s)
 
     if not this_ticket_breads:
-        cook_time_second = sum(
+        preparation_time_second = sum(
             count * time_per_bread[bread_id]
             for bread_id, count in current_user_detail.items()
         )
@@ -684,7 +684,7 @@ async def calculate_ready_status(
                 else:
                     total_remaining_before += count * time_per_bread[bread_id]
 
-        total_wait_s = total_remaining_before + cook_time_second + full_round_time_sec
+        total_wait_s = total_remaining_before + preparation_time_second + baking_time_s
         return False, False, int(total_wait_s)
 
     if bread_count > len(this_ticket_breads):
@@ -692,7 +692,7 @@ async def calculate_ready_status(
         this_ticket_average_cook_time = sum(breads_cook_time) // len(breads_cook_time)
         how_many_left = bread_count - len(this_ticket_breads)
         left_breads_second = how_many_left * this_ticket_average_cook_time
-        return False, False, int(left_breads_second) + full_round_time_sec
+        return False, False, int(left_breads_second) + baking_time_s
 
     last_bread_time = this_ticket_breads[bread_count - 1]
     if now >= last_bread_time:

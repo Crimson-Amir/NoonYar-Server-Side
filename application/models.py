@@ -41,7 +41,7 @@ class Bakery(Base):
     token = Column(String, nullable=False, default=generate_token)
     active = Column(Boolean, default=True)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
-    full_round_time_min = Column(Integer, nullable=False, default=10)
+    baking_time_s = Column(Integer, nullable=False, default=600)
     timeout_sec = Column(Integer, nullable=False, default=0)
     bread_associations = relationship("BakeryBread", back_populates="bakery", cascade="all, delete-orphan")
     bread_cook_time_log_associations = relationship("BreadCookTimeLog", back_populates="bakery", cascade="all, delete-orphan")
@@ -65,7 +65,7 @@ class BakeryBread(Base):
 
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), primary_key=True)
     bread_type_id = Column(Integer, ForeignKey('bread_type.bread_id', ondelete='CASCADE'), primary_key=True)
-    cook_time_s = Column(Integer, nullable=False)
+    preparation_time = Column(Integer, nullable=False)
 
     bakery = relationship("Bakery", back_populates="bread_associations")
     bread = relationship("BreadType", back_populates="bakery_associations")

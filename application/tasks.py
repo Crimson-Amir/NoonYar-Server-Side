@@ -205,7 +205,7 @@ def calculate_new_time_per_bread(self, bakery_id):
             crud.new_cook_avreage_time(db, bakery_id, average_time_diff)
             all_bakery_breads = crud.get_bakery_breads(db, bakery_id)
             for bread in all_bakery_breads:
-                new_cook_time = max(20, min(80, bread.cook_time_s + differnet_second))
+                new_cook_time = max(20, min(80, bread.preparation_time + differnet_second))
                 crud.update_bread_bakery_no_commit(db, bakery_id, bread.bread_type_id, new_cook_time)
             redis_helper.reset_time_per_bread_sync(r, db, bakery_id)
 

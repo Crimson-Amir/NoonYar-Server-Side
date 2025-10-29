@@ -122,7 +122,7 @@ def update_customers_status(db: Session, ticket_id: int, bakery_id: int, new_sta
     return result
 
 def add_bakery(db: Session, bakery: schemas.AddBakery):
-    bakery_db = models.Bakery(name=bakery.name, location=bakery.location, active=bakery.active)
+    bakery_db = models.Bakery(name=bakery.name, location=bakery.location, active=bakery.active, baking_time_s=bakery.baking_time_s)
     db.add(bakery_db)
     db.commit()
     db.refresh(bakery_db)
@@ -179,27 +179,27 @@ def add_bakery_bread_entries(db: Session, bakery_id:int, bread_type_and_cook_tim
         models.BakeryBread(
             bakery_id=bakery_id,
             bread_type_id=int(bread_type_id),
-            cook_time_s=cook_time_s
+            preparation_time=preparation_time
         )
-        for bread_type_id, cook_time_s in bread_type_and_cook_time.items()
+        for bread_type_id, preparation_time in bread_type_and_cook_time.items()
     ]
 
     db.add_all(new_entries)
 
-def add_single_bread_to_bakery_no_commit(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
+def add_single_bread_to_bakery_no_commit(db: Session, bakery_id:int, bread_type_id: int, preparation_time):
     new_entry = models.BakeryBread(
         bakery_id=bakery_id,
         bread_type_id=int(bread_type_id),
-        cook_time_s=cook_time_s
+        preparation_time=preparation_time
     )
     db.add(new_entry)
 
-def update_bread_bakery_no_commit(db: Session, bakery_id:int, bread_type_id: int, cook_time_s):
+def update_bread_bakery_no_commit(db: Session, bakery_id:int, bread_type_id: int, preparation_time):
     stmt = (
         update(models.BakeryBread)
         .where(models.BakeryBread.bread_type_id == bread_type_id)
         .where(models.BakeryBread.bakery_id == bakery_id)
-        .values(cook_time_s=cook_time_s)
+        .values(preparation_time=preparation_time)
     )
     result = db.execute(stmt)
     return result

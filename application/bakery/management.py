@@ -35,7 +35,7 @@ def require_admin(
 @handle_errors
 async def add_bakery(request: Request, bakery: schemas.AddBakery, db: Session = Depends(endpoint_helper.get_db), _:int = Depends(require_admin)):
     bakery = crud.add_bakery(db, bakery)
-    logger.info(f"{FILE_NAME}:add_bakery", extra={"bakery_name": bakery.name, "location": bakery.location, "active": bakery.active})
+    logger.info(f"{FILE_NAME}:add_bakery", extra={"bakery_name": bakery.name, "location": bakery.location, "active": bakery.active, "baking_time_s": bakery.baking_time_s})
     if bakery.active:
         await redis_helper.initialize_redis_sets(request.app.state.redis, bakery.bakery_id)
     return bakery
@@ -105,10 +105,10 @@ async def update_bakery_single_bread(
     existing = crud.get_bakery_bread(db, data.bakery_id, data.bread_id)
 
     if existing:
-        crud.update_bread_bakery_no_commit(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        crud.update_bread_bakery_no_commit(db, data.bakery_id, data.bread_id, data.preparation_time)
         state = 'update'
     else:
-        crud.add_single_bread_to_bakery_no_commit(db, data.bakery_id, data.bread_id, data.cook_time_s)
+        crud.add_single_bread_to_bakery_no_commit(db, data.bakery_id, data.bread_id, data.preparation_time)
         state = 'add'
 
     db.commit()
@@ -116,7 +116,7 @@ async def update_bakery_single_bread(
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
     logger.info(f"{FILE_NAME}:add_single_bread_to_bakery",
-                extra={"bread_id": data.bread_id, "cook_time_s": data.cook_time_s})
+                extra={"bread_id": data.bread_id, "preparation_time": data.preparation_time})
 
     return {'status': 'OK', 'state': state}
 
