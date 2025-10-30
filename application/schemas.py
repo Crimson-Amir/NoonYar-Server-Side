@@ -34,7 +34,7 @@ class TickeOperationtRequirement(BakeryID):
     customer_ticket_id: int
 
 class Initialize(BakeryID):
-    bread_type_id_and_cook_time: Dict[str, int]
+    bread_type_id_and_preparation_time: Dict[str, int]
 
 class AddBakery(BaseModel):
     name: str

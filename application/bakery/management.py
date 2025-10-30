@@ -75,11 +75,11 @@ async def bakery_bread(
         _: int = Depends(require_admin)
 ):
     crud.delete_all_corresponding_bakery_bread(db, data.bakery_id)
-    crud.add_bakery_bread_entries(db, data.bakery_id, data.bread_type_id_and_cook_time)
+    crud.add_bakery_bread_entries(db, data.bakery_id, data.bread_type_id_and_preparation_time)
     db.commit()
     new_config = await redis_helper.reset_bakery_metadata(request.app.state.redis, data.bakery_id)
     await mqtt_client.update_time_per_bread(request, data.bakery_id, new_config)
-    logger.info(f"{FILE_NAME}:bakery_bread", extra={"bakery_id": data.bakery_id, "bread_type_id_and_cook_time": data.bread_type_id_and_cook_time})
+    logger.info(f"{FILE_NAME}:bakery_bread", extra={"bakery_id": data.bakery_id, "bread_type_id_and_cook_time": data.bread_type_id_and_preparation_time})
     return {'status': 'OK'}
 
 

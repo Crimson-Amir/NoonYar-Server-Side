@@ -97,7 +97,7 @@ class Customer(Base):
 
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
-    wait_list_associations = relationship("Wait_list", back_populates="customer", cascade="all, delete-orphan")
+    wait_list_associations = relationship("WaitList", back_populates="customer", cascade="all, delete-orphan")
     upcoming_associations = relationship("UpcomingCustomer", back_populates="customer", cascade="all, delete-orphan")
     bakery = relationship("Bakery", back_populates="customers")
 

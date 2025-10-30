@@ -34,11 +34,12 @@ def session_scope():
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID):
     json_data = {'chat_id': settings.TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
-    requests.post(
+    response = requests.post(
         url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
         json=json_data,
         timeout=10
     )
+    response.raise_for_status()
 
 def handle_task_errors(func):
     @functools.wraps(func)
@@ -110,7 +111,6 @@ def send_ticket_to_wait_list(self, hardware_customer_id, bakery_id):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def send_otp(self, mobile_number, code, expire_m=10):
-    celery_logger.info("hello")
     url = f"https://api.sms.ir/v1/send/verify"
     data = {
         "mobile": str(mobile_number),

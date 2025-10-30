@@ -7,7 +7,7 @@ import aiomqtt
 from application.setting import settings
 from application.user import authentication, user
 from application.bakery import hardware_communication, management
-from application.admin import manage
+from application.admin import manage, init
 import redis.asyncio as redis
 from contextlib import asynccontextmanager
 from application.mqtt_client import mqtt_handler
@@ -79,12 +79,13 @@ app.include_router(user.router)
 app.include_router(hardware_communication.router)
 app.include_router(management.router)
 app.include_router(manage.router)
+app.include_router(init.router)
 
 @app.middleware("http")
 async def authenticate_request(request: Request, call_next):
 
     exception_paths = ["/auth/logout-successful", "/auth/sign-up", "/auth/enter-number", "/auth/verify-otp",
-                       "/hc", "/docs", "/auth/logout"]
+                       "/hc", "/docs", "/auth/logout", "admin/init"]
 
     if any(request.url.path.startswith(path) for path in exception_paths):
         return await call_next(request)
@@ -98,7 +99,7 @@ async def authenticate_request(request: Request, call_next):
         try:
             if await blacklist.is_blacklisted(access_token):
                 return JSONResponse(status_code=403, content={"detail": "Access token blacklisted"})
-            payload = jwt.decode(access_token, settings.SECRET_KEY, algorithms=settings.ALGORITHM)
+            payload = jwt.decode(access_token, settings.ACCESS_TOKEN_SECRET_KEY, algorithms=settings.ALGORITHM)
             request.state.user = payload
             return await call_next(request)
         except jwt.ExpiredSignatureError:
@@ -110,13 +111,13 @@ async def authenticate_request(request: Request, call_next):
         try:
             if await blacklist.is_blacklisted(refresh_token):
                 return JSONResponse(status_code=403, content={"detail": "Refresh token blacklisted"})
-            refresh_payload = jwt.decode(refresh_token, settings.REFRESH_SECRET_KEY, algorithms=settings.ALGORITHM)
+            refresh_payload = jwt.decode(refresh_token, settings.REFRESH_TOKEN_SECRET_KEY, algorithms=settings.ALGORITHM)
             new_token = create_access_token({
                 "user_id": refresh_payload["user_id"],
                 "first_name": refresh_payload["first_name"]
             })
 
-            request.state.user = jwt.decode(new_token, settings.SECRET_KEY, algorithms=["HS256"])
+            request.state.user = jwt.decode(new_token, settings.ACCESS_TOKEN_SECRET_KEY, algorithms=["HS256"])
             response = await call_next(request)
             set_cookie(response, "access_token", new_token, settings.ACCESS_TOKEN_EXP_MIN * 60)
             return response
