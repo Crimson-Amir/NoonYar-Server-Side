@@ -412,21 +412,21 @@ def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | Non
 #     db.add(otp)
 
 
-def get_customer_by_hardware_id(db, hardware_customer_id: int, bakery_id: int):
+def get_customer_by_ticket_id(db, ticket_id: int, bakery_id: int):
     """
-    Get customer by hardware_customer_id (ticket number) and bakery_id
+    Get customer by ticket_id (ticket number) and bakery_id
 
     Args:
         db: Database session
-        hardware_customer_id: The ticket ID shown to customers
+        ticket_id: The ticket ID shown to customers
         bakery_id: Bakery ID
 
     Returns:
         Customer object or None
     """
-    return db.query(Customer).filter(
-        Customer.ticket_id == hardware_customer_id,
-        Customer.bakery_id == bakery_id
+    return db.query(models.Customer).filter(
+        models.Customer.ticket_id == ticket_id,
+        models.Customer.bakery_id == bakery_id
     ).first()
 
 

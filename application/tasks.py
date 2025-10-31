@@ -89,23 +89,23 @@ def remove_customer_from_upcoming_customers(self, customer_ticket_id, bakery_id)
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def next_ticket_process(self, hardware_customer_id, bakery_id):
+def next_ticket_process(self, ticket_id, bakery_id):
     with session_scope() as db:
-        crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
+        crud.update_customers_status(db, ticket_id, bakery_id, False)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def serve_wait_list_ticket(self, hardware_customer_id, bakery_id):
+def serve_wait_list_ticket(self, ticket_id, bakery_id):
     with session_scope() as db:
-        crud.update_wait_list_customer_status(db, hardware_customer_id, bakery_id, False)
+        crud.update_wait_list_customer_status(db, ticket_id, bakery_id, False)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def send_ticket_to_wait_list(self, hardware_customer_id, bakery_id):
+def send_ticket_to_wait_list(self, ticket_id, bakery_id):
     with session_scope() as db:
-        customer = crud.update_customers_status(db, hardware_customer_id, bakery_id, False)
+        customer = crud.update_customers_status(db, ticket_id, bakery_id, False)
         customer_id = max(row[0] for row in customer)
         crud.add_new_ticket_to_wait_list(db, customer_id, True)
 
@@ -227,7 +227,7 @@ def save_bread_to_db(self, customer_ticket_id, bakery_id, baked_at_timestamp):
     """
     with session_scope() as db:
         # Get internal customer ID from hardware customer ID
-        customer = crud.get_customer_by_hardware_id(db, customer_ticket_id, bakery_id)
+        customer = crud.get_customer_by_ticket_id(db, customer_ticket_id, bakery_id)
         if customer:
             baked_at = datetime.fromtimestamp(baked_at_timestamp, tz=UTC)
             crud.create_bread(db, customer.id, baked_at)

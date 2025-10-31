@@ -377,7 +377,7 @@ async def new_bread(
     r = request.app.state.redis
 
     # ============================================================
-    # TRIP 1: Fetch ALL data in ONE pipeline (6-7 operations)
+    # TRIP 1: Fetch ALL data in ONE pipeline
     # ============================================================
     prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
     baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
@@ -403,7 +403,7 @@ async def new_bread(
         time_per_bread, reservations_map, order_ids = results
 
     # ============================================================
-    # PROCESS: All calculations in memory (no Redis calls)
+    # PROCESS: All calculations in memory
     # ============================================================
 
     # Parse data
@@ -411,12 +411,19 @@ async def new_bread(
     time_per_bread = {k: int(v) for k, v in time_per_bread.items()} if time_per_bread else {}
     reservations_map = reservations_map or {}
 
-    if not order_ids or not reservations_map:
+    if not order_ids or not reservations_map or not time_per_bread:
         return {"has_customer": False}
+
+    bread_ids_sorted = sorted(time_per_bread.keys())
 
     # Calculate current prep state
     if prep_state_str:
         customer_id, bread_count = map(int, prep_state_str.split(':'))
+        # Verify customer still exists in reservations
+        if str(customer_id) not in reservations_map:
+            # Customer removed, reset to first in queue
+            customer_id = order_ids[0]
+            bread_count = 0
     else:
         # Initialize with first customer
         customer_id = order_ids[0]
@@ -425,12 +432,15 @@ async def new_bread(
     # Get customer reservation
     reservation_str = reservations_map.get(str(customer_id))
     if not reservation_str:
+        # Customer not found, clean up prep_state and return
+        await r.delete(prep_state_key)
         return {"has_customer": False}
 
-    bread_ids_sorted = sorted(time_per_bread.keys())
     counts = list(map(int, reservation_str.split(',')))
     total_needed = sum(counts)
-    customer_breads = {bid: count for bid, count in zip(bread_ids_sorted, counts) if count > 0}
+
+    # Include ALL bread types (even if count is 0)
+    customer_breads = {bid: count for bid, count in zip(bread_ids_sorted, counts)}
 
     # Calculate timing
     last_index = int(last_bread_index or 0)
@@ -449,38 +459,41 @@ async def new_bread(
     # Prepare bread value
     bread_value = f"{bread_cook_date}:{customer_id}"
 
-    # Calculate next state
+    # Calculate next state after making this bread
     bread_count += 1
-    moved_to_next = False
-    next_customer_id = customer_id
-    next_customer_breads = customer_breads
+    is_next_customer = False
+    response_customer_id = customer_id
+    response_customer_breads = customer_breads
+    new_prep_state = None
 
     if bread_count >= total_needed:
-        # Customer complete, find next
-        moved_to_next = True
+        # Current customer complete, find next customer
+        is_next_customer = True
         try:
             current_idx = order_ids.index(customer_id)
             if current_idx + 1 < len(order_ids):
-                next_customer_id = order_ids[current_idx + 1]
-                next_reservation_str = reservations_map.get(str(next_customer_id))
-                if next_reservation_str:
-                    next_counts = list(map(int, next_reservation_str.split(',')))
-                    next_customer_breads = {
+                response_customer_id = order_ids[current_idx + 1]
+                response_reservation_str = reservations_map.get(str(response_customer_id))
+
+                if response_reservation_str:
+                    response_counts = list(map(int, response_reservation_str.split(',')))
+                    # Include ALL bread types
+                    response_customer_breads = {
                         bid: count
-                        for bid, count in zip(bread_ids_sorted, next_counts)
-                        if count > 0
+                        for bid, count in zip(bread_ids_sorted, response_counts)
                     }
-                    new_prep_state = f"{next_customer_id}:0"
+                    new_prep_state = f"{response_customer_id}:0"
                 else:
-                    # No valid next customer
-                    next_customer_id = None
+                    # Next customer not found in reservations, clean up
+                    response_customer_id = None
                     new_prep_state = None
             else:
                 # No more customers
-                next_customer_id = None
+                response_customer_id = None
                 new_prep_state = None
         except ValueError:
-            next_customer_id = None
+            # Current customer not in order, clean up
+            response_customer_id = None
             new_prep_state = None
     else:
         # Continue with same customer
@@ -522,22 +535,21 @@ async def new_bread(
             "belongs_to": customer_id,
             "bread_count": bread_count,
             "total_needed": total_needed,
-            "moved_to_next": moved_to_next,
+            "is_next_customer": is_next_customer,
         }
     )
 
     # ============================================================
     # RESPONSE
     # ============================================================
-    if not next_customer_id:
+    if not response_customer_id:
         return {"has_customer": False}
 
     return {
-        "customer_id": next_customer_id,
-        "customer_breads": next_customer_breads,
-        "next_customer": moved_to_next
+        "customer_id": response_customer_id,
+        "customer_breads": response_customer_breads,
+        "next_customer": is_next_customer
     }
-
 
 @router.get('/hardware_init')
 @handle_errors

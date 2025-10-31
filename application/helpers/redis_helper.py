@@ -277,9 +277,9 @@ async def get_bakery_wait_list(r, bakery_id, fetch_from_redis_first=True, bakery
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
             reservation = [bread_counts.get(int(bid), 0) for bid in time_per_bread.keys()]
-            reservation_dict[customer.hardware_customer_id] = reservation
+            reservation_dict[customer.ticket_id] = reservation
 
-            pipe.hset(skipped_customer_key, str(customer.hardware_customer_id), ",".join(map(str, reservation)))
+            pipe.hset(skipped_customer_key, str(customer.ticket_id), ",".join(map(str, reservation)))
 
         if reservation_dict:
             ttl = seconds_until_midnight_iran()
@@ -312,10 +312,10 @@ async def get_bakery_reservations(r, bakery_id: int, fetch_from_redis_first=True
         for customer in today_customers:
             bread_counts = {bread.bread_type_id: bread.count for bread in customer.bread_associations}
             reservation = [bread_counts.get(int(bid), 0) for bid in time_per_bread.keys()]
-            reservation_dict[customer.hardware_customer_id] = reservation
+            reservation_dict[customer.ticket_id] = reservation
 
-            pipe.hset(reservations_key, str(customer.hardware_customer_id), ",".join(map(str, reservation)))
-            pipe.zadd(order_key, {str(customer.hardware_customer_id): customer.hardware_customer_id})
+            pipe.hset(reservations_key, str(customer.ticket_id), ",".join(map(str, reservation)))
+            pipe.zadd(order_key, {str(customer.ticket_id): customer.ticket_id})
 
         
         if reservation_dict:
@@ -385,7 +385,7 @@ async def get_last_ticket_number(r, bakery_id, fetch_from_redis_first=True):
     with SessionLocal() as db:
         last_customer = crud.get_today_last_customer(db, bakery_id)
 
-        last = last_customer.hardware_customer_id if last_customer else 0
+        last = last_customer.ticket_id if last_customer else 0
 
         pipe = r.pipeline()
         pipe.set(last_one_key, last)
@@ -463,7 +463,7 @@ async def ensure_upcoming_customers_zset(
         entries = crud.get_bakery_upcoming_customers(db, bakery_id)
         res = None
         if entries:
-            customer_ids = {str(customer.customer.hardware_customer_id): int(customer.customer.hardware_customer_id) for customer in entries}
+            customer_ids = {str(customer.customer.ticket_id): int(customer.customer.ticket_id) for customer in entries}
             pipe.zadd(zkey, customer_ids)
             ttl = seconds_until_midnight_iran()
             pipe.expire(zkey, ttl)
