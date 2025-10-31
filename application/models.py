@@ -99,6 +99,7 @@ class Customer(Base):
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
     wait_list_associations = relationship("WaitList", back_populates="customer", cascade="all, delete-orphan")
     upcoming_associations = relationship("UpcomingCustomer", back_populates="customer", cascade="all, delete-orphan")
+    breads = relationship("Bread", back_populates="customer", cascade="all, delete-orphan")
     bakery = relationship("Bakery", back_populates="customers")
 
 
@@ -147,6 +148,15 @@ class BreadCookTimeLog(Base):
 
     bakery = relationship("Bakery", back_populates="bread_cook_time_log_associations")
 
+
+class Bread(Base):
+    __tablename__ = 'bread'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    enter_date = Column(DateTime, default=lambda: datetime.now(UTC))
+    baked_at = Column(DateTime, nullable=False)
+    belongs_to = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), nullable=False)
+    customer = relationship("Customer", back_populates="breads")
 
 # class OTP(Base):
 #     __tablename__ = 'otp_table'

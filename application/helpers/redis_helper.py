@@ -5,6 +5,7 @@ from application.helpers.general_helpers import seconds_until_midnight_iran
 import time
 from collections import defaultdict
 
+
 REDIS_KEY_PREFIX = "bakery:{0}"
 REDIS_KEY_RESERVATIONS = f"{REDIS_KEY_PREFIX}:reservations"
 REDIS_KEY_RESERVATION_ORDER = f"{REDIS_KEY_PREFIX}:reservation_order"
@@ -20,6 +21,7 @@ REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
 REDIS_KEY_LAST_BREAD_TIME = f"{REDIS_KEY_PREFIX}:last_bread_time"
 REDIS_KEY_BREAD_TIME_DIFFS = f"{REDIS_KEY_PREFIX}:bread_time_diff"
 REDIS_KEY_LAST_BREAD_INDEX = f"{REDIS_KEY_PREFIX}:last_bread_index"
+REDIS_KEY_PREP_STATE = f"{REDIS_KEY_PREFIX}:prep_state"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 async def handle_time_per_bread(r, bakery_id):
@@ -592,7 +594,8 @@ async def initialize_redis_sets(r, bakery_id: int):
     await ensure_upcoming_customers_zset(r, bakery_id, fetch_from_redis_first=False)
     await get_baking_time_s(r, bakery_id, fetch_from_redis_first=False)
     await get_timeout_second(r, bakery_id, fetch_from_redis_first=False)
-    # TODO: REMOVE CURRENT_CUSTOMER HERE
+    await load_breads_from_db(r, bakery_id)
+    await rebuild_prep_state(r, bakery_id)
 
 async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
     await reset_timeout(r, bakery_id)
@@ -609,6 +612,8 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id),
         REDIS_KEY_BAKING_TIME_S.format(bakery_id),
         REDIS_KEY_TIMEOUT_SEC.format(bakery_id),
+        REDIS_KEY_PREP_STATE.format(bakery_id),
+        REDIS_KEY_BREADS.format(bakery_id),
     ]
 
     pipe = r.pipeline(transaction=True)
@@ -715,3 +720,232 @@ async def consume_ready_breads(r, bakery_id: int, bread_count: int):
     # Remove them from the sorted set
     removed_count = await r.zrem(breads_key, *zitems)
     return removed_count
+
+
+async def get_prep_state(r, bakery_id: int) -> dict:
+    """
+    Get current preparation state
+
+    Returns: {
+        'customer_id': int or None,
+        'customer_breads': dict,
+        'bread_count': int,  # how many breads made so far for this customer
+        'total_needed': int
+    }
+    """
+    prep_state_key = REDIS_KEY_PREP_STATE.format(bakery_id)
+    state_str = await r.get(prep_state_key)
+
+    if state_str:
+        # Parse: "customer_id:bread_count"
+        customer_id, bread_count = map(int, state_str.split(':'))
+
+        # Get customer's requirements
+        res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
+        time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+
+        pipe = r.pipeline()
+        pipe.hget(res_key, str(customer_id))
+        pipe.hgetall(time_key)
+        reservation_str, time_per_bread = await pipe.execute()
+
+        if not reservation_str:
+            # Customer not found, reset state
+            await r.delete(prep_state_key)
+            return await get_prep_state(r, bakery_id)
+
+        bread_ids_sorted = sorted(time_per_bread.keys())
+        counts = list(map(int, reservation_str.split(',')))
+        total_needed = sum(counts)
+        customer_breads = {bid: count for bid, count in zip(bread_ids_sorted, counts) if count > 0}
+
+        return {
+            'customer_id': customer_id,
+            'customer_breads': customer_breads,
+            'bread_count': bread_count,
+            'total_needed': total_needed
+        }
+
+    # No state exists, initialize with first customer
+    order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
+    time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.zrange(order_key, 0, 0)
+    pipe.hgetall(res_key)
+    pipe.hgetall(time_key)
+    first_customer, reservations_map, time_per_bread = await pipe.execute()
+
+    if not first_customer or not reservations_map:
+        return {
+            'customer_id': None,
+            'customer_breads': {},
+            'bread_count': 0,
+            'total_needed': 0
+        }
+
+    customer_id = int(first_customer[0])
+    reservation_str = reservations_map.get(str(customer_id))
+
+    if not reservation_str:
+        return {
+            'customer_id': None,
+            'customer_breads': {},
+            'bread_count': 0,
+            'total_needed': 0
+        }
+
+    bread_ids_sorted = sorted(time_per_bread.keys())
+    counts = list(map(int, reservation_str.split(',')))
+    total_needed = sum(counts)
+    customer_breads = {bid: count for bid, count in zip(bread_ids_sorted, counts) if count > 0}
+
+    # Initialize state
+    ttl = seconds_until_midnight_iran()
+    await r.set(prep_state_key, f"{customer_id}:0", ex=ttl)
+
+    return {
+        'customer_id': customer_id,
+        'customer_breads': customer_breads,
+        'bread_count': 0,
+        'total_needed': total_needed
+    }
+
+
+async def advance_prep_state(r, bakery_id: int) -> dict:
+    """
+    Advance preparation state after making one bread
+    Returns next state (same format as get_prep_state)
+    """
+    prep_state_key = REDIS_KEY_PREP_STATE.format(bakery_id)
+    state_str = await r.get(prep_state_key)
+
+    if not state_str:
+        return await get_prep_state(r, bakery_id)
+
+    customer_id, bread_count = map(int, state_str.split(':'))
+    bread_count += 1
+
+    # Get customer's total requirement
+    res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
+    reservation_str = await r.hget(res_key, str(customer_id))
+
+    if not reservation_str:
+        await r.delete(prep_state_key)
+        return await get_prep_state(r, bakery_id)
+
+    total_needed = sum(map(int, reservation_str.split(',')))
+    ttl = seconds_until_midnight_iran()
+
+    if bread_count >= total_needed:
+        # Customer complete, move to next
+        order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+        all_customers = await r.zrange(order_key, 0, -1)
+        all_customers = [int(x) for x in all_customers]
+
+        try:
+            current_idx = all_customers.index(customer_id)
+            if current_idx + 1 < len(all_customers):
+                next_customer_id = all_customers[current_idx + 1]
+                await r.set(prep_state_key, f"{next_customer_id}:0", ex=ttl)
+                return await get_prep_state(r, bakery_id)
+        except ValueError:
+            pass
+
+        # No more customers
+        await r.delete(prep_state_key)
+        return {
+            'customer_id': None,
+            'customer_breads': {},
+            'bread_count': 0,
+            'total_needed': 0
+        }
+    else:
+        # Continue with same customer
+        await r.set(prep_state_key, f"{customer_id}:{bread_count}", ex=ttl)
+        return await get_prep_state(r, bakery_id)
+
+
+async def load_breads_from_db(r, bakery_id: int):
+    """
+    Load today's breads from database into Redis on initialization
+    """
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+
+    with SessionLocal() as db:
+        today_breads = crud.get_today_breads(db, bakery_id)
+
+        if not today_breads:
+            return
+
+        pipe = r.pipeline()
+        pipe.delete(breads_key)
+
+        # Build mapping for zadd: {value: score}
+        bread_mapping = {}
+        for bread in today_breads:
+            # Get hardware customer ID from internal customer ID
+            customer = db.query(crud.models.Customer).filter_by(id=bread.belongs_to).first()
+            if customer:
+                baked_at_timestamp = int(bread.baked_at.timestamp())
+                bread_value = f"{baked_at_timestamp}:{customer.ticket_id}"
+                # Use bread.id as score (unique identifier)
+                bread_mapping[bread_value] = bread.id
+
+        if bread_mapping:
+            pipe.zadd(breads_key, bread_mapping)
+            ttl = seconds_until_midnight_iran()
+            pipe.expire(breads_key, ttl)
+
+        await pipe.execute()
+        print(f"Loaded {len(bread_mapping)} breads from database for bakery {bakery_id}")
+
+
+async def rebuild_prep_state(r, bakery_id: int):
+    """
+    Rebuild preparation state from loaded breads and reservations
+    Should be called after load_breads_from_db
+    """
+    prep_state_key = REDIS_KEY_PREP_STATE.format(bakery_id)
+    order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.zrange(order_key, 0, -1)
+    pipe.hgetall(res_key)
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')
+
+    order_ids, reservations_map, all_breads = await pipe.execute()
+
+    if not order_ids or not reservations_map:
+        await r.delete(prep_state_key)
+        return
+
+    order_ids = [int(x) for x in order_ids]
+    reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
+
+    # Count breads per customer
+    breads_per_customer = defaultdict(int)
+    for bread_value in all_breads:
+        if ':' in bread_value:
+            cid = int(bread_value.split(':')[1])
+            breads_per_customer[cid] += 1
+
+    # Find first incomplete customer
+    for customer_id in order_ids:
+        total_needed = sum(reservation_dict[customer_id])
+        already_made = breads_per_customer.get(customer_id, 0)
+
+        if already_made < total_needed:
+            # This customer is still in preparation
+            ttl = seconds_until_midnight_iran()
+            await r.set(prep_state_key, f"{customer_id}:{already_made}", ex=ttl)
+            print(
+                f"Rebuilt prep_state for bakery {bakery_id}: customer {customer_id} has {already_made}/{total_needed} breads")
+            return
+
+    # All customers complete or no incomplete customers found
+    await r.delete(prep_state_key)
+    print(f"No incomplete customers found for bakery {bakery_id}")

@@ -197,7 +197,7 @@ async def send_ticket_to_wait_list(
     current_ticket_id = int(current_ticket_id_raw[0])
 
     if not current_ticket_id:
-        endpoint_helper.raise_empty_queue_exception()
+        raise HTTPException(status_code=404, detail={'status': 'The queue is empty'})
 
     await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
 
@@ -210,7 +210,7 @@ async def send_ticket_to_wait_list(
     if not bool(r1 and r2):
         reservation_list = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False)
         if not reservation_list:
-            endpoint_helper.raise_empty_queue_exception()
+            raise HTTPException(status_code=404, detail={'status': 'The queue is empty'})
         status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
         if not status: raise HTTPException(status_code=401, detail="invalid customer_id")
 
@@ -313,7 +313,7 @@ async def get_upcoming_customer(
     if not reservation_str:
         await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
         return {"empty_upcoming": True}
-    
+
     counts = [int(x) for x in reservation_str.split(',')]
     keys = [int(x) for x in order_ids]
     baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
@@ -362,6 +362,107 @@ async def get_upcoming_customer(
 
     return response
 
+
+@router.post('/new_bread/{bakery_id}')
+@handle_errors
+async def new_bread(
+        bakery_id,
+        request: Request,
+        token: str = Depends(validate_token)
+):
+    bakery_id = int(bakery_id)
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    # Get current prep state
+    prep_state = await redis_helper.get_prep_state(r, bakery_id)
+
+    if not prep_state['customer_id']:
+        return {"has_customer": False}
+
+    # Timing calculations (preserve existing logic)
+    baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
+    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+    last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
+    bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
+    last_bread_index_key = redis_helper.REDIS_KEY_LAST_BREAD_INDEX.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.get(baking_time_key)
+    pipe.get(last_bread_time_key)
+    pipe.get(last_bread_index_key)
+    baking_time_s_raw, last_bread_time, last_bread_index = await pipe.execute()
+
+    last_index = int(last_bread_index or 0)
+    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
+    now = datetime.now()
+    now_ts = int(now.timestamp())
+    bread_cook_date = int((now + timedelta(seconds=baking_time_s)).timestamp())
+    bread_index = last_index + 1
+    ttl = seconds_until_midnight_iran()
+
+    time_diff = None
+    if last_bread_time:
+        last_bread_time = int(float(last_bread_time))
+        time_diff = now_ts - last_bread_time
+
+    # Save bread with belongs_to
+    customer_id = prep_state['customer_id']
+    bread_value = f"{bread_cook_date}:{customer_id}"
+
+    pipe = r.pipeline(transaction=True)
+    pipe.set(last_bread_time_key, now_ts, ex=ttl)
+    pipe.zadd(breads_key, {bread_value: bread_index})
+    pipe.expire(breads_key, ttl)
+    pipe.set(last_bread_index_key, bread_index, ex=ttl)
+    if time_diff is not None:
+        pipe.zadd(bread_diff_key, {str(bread_index): time_diff})
+        pipe.expire(bread_diff_key, ttl)
+
+    await pipe.execute()
+
+    logger.info(
+        f"{FILE_NAME}:new_bread",
+        extra={
+            "bakery_id": bakery_id,
+            "bread_index": bread_index,
+            "belongs_to": customer_id,
+            "bread_count": prep_state['bread_count'] + 1,
+            "total_needed": prep_state['total_needed'],
+        }
+    )
+
+    # Save bread to database asynchronously
+    tasks.save_bread_to_db.delay(customer_id, bakery_id, bread_cook_date)
+
+    # Advance prep state
+    next_state = await redis_helper.advance_prep_state(r, bakery_id)
+
+    if not next_state['customer_id']:
+        return {"has_customer": False}
+
+    # Check if we moved to a different customer
+    moved_to_next = next_state['customer_id'] != customer_id
+
+    return {
+        "customer_id": next_state['customer_id'],
+        "customer_breads": next_state['customer_breads'],
+        "next_customer": moved_to_next
+    }
+
+
+@router.get('/hardware_init')
+@handle_errors
+async def hardware_initialize(request: Request, bakery_id: int):
+    db = SessionLocal()
+    try:
+        return await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
+    finally:
+        db.close()
+
+
 @router.put('/timeout/update')
 @handle_errors
 async def update_timeout(
@@ -385,80 +486,4 @@ async def update_timeout(
 
     logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
     return {"timeout_sec": new_timeout}
-
-@router.post('/new_bread/{bakery_id}')
-@handle_errors
-async def new_bread(
-    bakery_id,
-    request: Request,
-    token: str = Depends(validate_token)
-):
-    bakery_id = bakery_id
-    if not token_helpers.verify_bakery_token(token, bakery_id):
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    r = request.app.state.redis
-
-    baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
-    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
-    last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
-    bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
-    last_bread_index_key = redis_helper.REDIS_KEY_LAST_BREAD_INDEX.format(bakery_id)
-    pipe = r.pipeline()
-    pipe.get(baking_time_key)
-    pipe.zcard(breads_key)
-    pipe.get(last_bread_time_key)
-    pipe.get(last_bread_index_key)
-    baking_time_s_raw, bread_count, last_bread_time, last_bread_index = await pipe.execute()
-
-
-    last_index = int(last_bread_index or 0)
-    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
-    now = datetime.now()
-    now_ts = int(now.timestamp())
-    bread_cook_date = int((now + timedelta(seconds=baking_time_s)).timestamp())
-    bread_index = last_index + 1
-    ttl = seconds_until_midnight_iran()
-
-    time_diff = None
-
-    if last_bread_time:
-        last_bread_time = int(float(last_bread_time))
-        time_diff = now_ts - last_bread_time
-
-    pipe = r.pipeline(transaction=True)
-    pipe.set(last_bread_time_key, now_ts, ex=ttl)
-    pipe.zadd(breads_key, {str(bread_cook_date): bread_index})
-    pipe.expire(breads_key, ttl)
-    pipe.set(last_bread_index_key, bread_index, ex=ttl)
-    if time_diff is not None:
-        pipe.zadd(bread_diff_key, {str(bread_index): time_diff})
-        pipe.expire(bread_diff_key, ttl)
-
-    await pipe.execute()
-
-    logger.info(
-        f"{FILE_NAME}:new_bread",
-        extra={
-            "bakery_id": bakery_id,
-            "bread_index": bread_index,
-            "bread_cook_date": bread_cook_date,
-            "time_diff": time_diff,
-        }
-    )
-
-    return {
-        "bread_index": bread_index,
-        "cook_date": bread_cook_date,
-        "time_diff": time_diff,
-    }
-
-@router.get('/hardware_init')
-@handle_errors
-async def hardware_initialize(request: Request, bakery_id: int):
-    db = SessionLocal()
-    try:
-        return await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
-    finally:
-        db.close()
 

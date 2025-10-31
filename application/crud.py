@@ -3,6 +3,7 @@ from sqlalchemy import update, case, select
 from application import models, schemas
 from application.auth import hash_password_md5
 import pytz
+from datetime import datetime, timezone
 from sqlalchemy import asc
 from datetime import datetime, time
 
@@ -409,3 +410,64 @@ def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | Non
 #     )
 #
 #     db.add(otp)
+
+
+def get_customer_by_hardware_id(db, hardware_customer_id: int, bakery_id: int):
+    """
+    Get customer by hardware_customer_id (ticket number) and bakery_id
+
+    Args:
+        db: Database session
+        hardware_customer_id: The ticket ID shown to customers
+        bakery_id: Bakery ID
+
+    Returns:
+        Customer object or None
+    """
+    return db.query(Customer).filter(
+        Customer.ticket_id == hardware_customer_id,
+        Customer.bakery_id == bakery_id
+    ).first()
+
+
+def create_bread(db, customer_internal_id: int, baked_at: datetime):
+    """
+    Create a new bread record
+
+    Args:
+        db: Database session
+        customer_internal_id: Internal customer.id (not ticket_id)
+        baked_at: DateTime when bread will be ready
+
+    Returns:
+        Created Bread object
+    """
+    bread = Bread(
+        belongs_to=customer_internal_id,
+        baked_at=baked_at
+    )
+    db.add(bread)
+    db.commit()
+    db.refresh(bread)
+    return bread
+
+
+def get_today_breads(db, bakery_id: int):
+    """
+    Get all breads created today for a specific bakery
+
+    Args:
+        db: Database session
+        bakery_id: Bakery ID
+
+    Returns:
+        List of Bread objects
+    """
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    return db.query(models.Bread).join(models.Customer).filter(
+        models.Customer.bakery_id == bakery_id,
+        models.Bread.enter_date >= today_start
+    ).all()

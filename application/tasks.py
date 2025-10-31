@@ -1,6 +1,8 @@
 import functools, requests
 from application import crud
 from celery import Celery
+from datetime import datetime
+from pytz import UTC
 from application.logger_config import celery_logger
 from application.database import SessionLocal
 from application.setting import settings
@@ -210,3 +212,30 @@ def calculate_new_time_per_bread(self, bakery_id):
             redis_helper.reset_time_per_bread_sync(r, db, bakery_id)
 
     r.zrem(bread_diff_key, *[bread_index for bread_index, _ in zitems])
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def save_bread_to_db(self, customer_ticket_id, bakery_id, baked_at_timestamp):
+    """
+    Save bread to database
+
+    Args:
+        customer_ticket_id: Hardware customer ID (ticket number)
+        bakery_id: Bakery ID
+        baked_at_timestamp: Unix timestamp when bread will be ready
+    """
+    with session_scope() as db:
+        # Get internal customer ID from hardware customer ID
+        customer = crud.get_customer_by_hardware_id(db, customer_ticket_id, bakery_id)
+        if customer:
+            baked_at = datetime.fromtimestamp(baked_at_timestamp, tz=UTC)
+            crud.create_bread(db, customer.id, baked_at)
+        else:
+            celery_logger.warning(
+                f"Customer not found for bread creation",
+                extra={
+                    "customer_ticket_id": customer_ticket_id,
+                    "bakery_id": bakery_id
+                }
+            )
