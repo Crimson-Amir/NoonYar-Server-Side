@@ -230,8 +230,13 @@ async def send_ticket_to_wait_list(
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
         tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
 
-    bread_count = sum([int(x) for x in current_customer_reservation.split(',')])
-    removed = await redis_helper.consume_ready_breads(r, bakery_id, bread_count)
+    removed = await redis_helper.consume_ready_breads(r, bakery_id, customer_id)
+
+    # Mark breads as consumed in the database as well
+    with SessionLocal() as db:
+        consumed_count = crud.consume_breads_for_customer_today(db, bakery_id, customer_id)
+        logger.info(f"Marked {consumed_count} breads as consumed in DB for ticket {customer_id}")
+
     logger.info(f"Removed {removed} breads for ticket {customer_id}")
     logger.info(f"{FILE_NAME}:send_ticket_to_wait_list", extra={"bakery_id": bakery_id, "customer_id": customer_id})
     return {
@@ -377,73 +382,127 @@ async def new_bread(
     r = request.app.state.redis
 
     # ============================================================
-    # TRIP 1: Fetch ALL data in ONE pipeline
+    # FETCH: Get all data in one pipeline
     # ============================================================
     prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
     baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
     breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
     last_bread_time_key = redis_helper.REDIS_KEY_LAST_BREAD_TIME.format(bakery_id)
     bread_diff_key = redis_helper.REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id)
-    last_bread_index_key = redis_helper.REDIS_KEY_LAST_BREAD_INDEX.format(bakery_id)
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
 
     pipe = r.pipeline()
-    pipe.get(prep_state_key)  # 0
-    pipe.get(baking_time_key)  # 1
-    pipe.get(last_bread_time_key)  # 2
-    pipe.get(last_bread_index_key)  # 3
-    pipe.hgetall(time_key)  # 4
-    pipe.hgetall(res_key)  # 5
-    pipe.zrange(order_key, 0, -1)  # 6
+    pipe.get(prep_state_key)
+    pipe.get(baking_time_key)
+    pipe.get(last_bread_time_key)
+    pipe.zrevrange(breads_key, 0, 0, withscores=True)  # Get last bread with highest score
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    pipe.zrange(order_key, 0, -1)
 
-    results = await pipe.execute()
-    prep_state_str, baking_time_s_raw, last_bread_time, last_bread_index, \
-        time_per_bread, reservations_map, order_ids = results
+    prep_state_str, baking_time_s_raw, last_bread_time, last_bread_data, \
+        time_per_bread, reservations_map, order_ids = await pipe.execute()
 
     # ============================================================
-    # PROCESS: All calculations in memory
+    # PARSE: Convert Redis data to usable format
     # ============================================================
-
-    # Parse data
     order_ids = [int(x) for x in order_ids] if order_ids else []
     time_per_bread = {k: int(v) for k, v in time_per_bread.items()} if time_per_bread else {}
-    reservations_map = reservations_map or {}
-
-    if not order_ids or not reservations_map or not time_per_bread:
-        return {"has_customer": False}
-
     bread_ids_sorted = sorted(time_per_bread.keys())
 
-    # Calculate current prep state
-    if prep_state_str:
-        customer_id, bread_count = map(int, prep_state_str.split(':'))
-        # Verify customer still exists in reservations
-        if str(customer_id) not in reservations_map:
-            # Customer removed, reset to first in queue
-            customer_id = order_ids[0]
-            bread_count = 0
+    # ============================================================
+    # LOGIC: Determine which customer we're working on
+    # ============================================================
+    def get_next_customer_after(customer_id):
+        """Find the customer after the given one, or None if no more."""
+        try:
+            idx = order_ids.index(customer_id)
+            return order_ids[idx + 1] if idx + 1 < len(order_ids) else None
+        except (ValueError, IndexError):
+            return None
+
+    def get_customer_needs(customer_id):
+        """Get total breads needed for a customer."""
+        if not customer_id or str(customer_id) not in reservations_map:
+            return 0
+        counts = list(map(int, reservations_map[str(customer_id)].split(',')))
+        return sum(counts)
+
+    def get_customer_breads_dict(customer_id):
+        """Get bread type -> count mapping for a customer."""
+        if not customer_id or str(customer_id) not in reservations_map:
+            return {}
+        counts = list(map(int, reservations_map[str(customer_id)].split(',')))
+        return {bid: count for bid, count in zip(bread_ids_sorted, counts)}
+
+    # Parse current prep state
+    working_customer_id = None
+    breads_made = 0
+    last_completed_customer = None
+
+    if prep_state_str and order_ids:
+        state_customer_id, state_bread_count = map(int, prep_state_str.split(':'))
+        needed = get_customer_needs(state_customer_id)
+
+        if state_bread_count >= needed:
+            # Current customer complete, move to next
+            last_completed_customer = state_customer_id
+            working_customer_id = get_next_customer_after(state_customer_id)
+            breads_made = 0
+        else:
+            # Continue with current customer
+            working_customer_id = state_customer_id
+            breads_made = state_bread_count
+    elif order_ids:
+        # No prep_state, start with first customer
+        working_customer_id = order_ids[0]
+        breads_made = 0
+
+    # ============================================================
+    # ACTION: Make this bread
+    # ============================================================
+    bread_belongs_to = working_customer_id or 0
+    breads_made += 1 if working_customer_id else 0
+
+    # Determine response (what's next after this bread)
+    customer_needs = get_customer_needs(working_customer_id)
+    is_customer_done = breads_made >= customer_needs if working_customer_id else False
+
+    if is_customer_done:
+        next_customer = get_next_customer_after(working_customer_id)
+        response = {
+            "customer_id": next_customer,
+            "customer_breads": get_customer_breads_dict(next_customer),
+            "next_customer": True
+        } if next_customer else {
+            "has_customer": False,
+            "belongs_to_customer": True,
+            "bread_index": None  # Will be set below
+        }
+    elif working_customer_id:
+        response = {
+            "customer_id": working_customer_id,
+            "customer_breads": get_customer_breads_dict(working_customer_id),
+            "next_customer": False
+        }
     else:
-        # Initialize with first customer
-        customer_id = order_ids[0]
-        bread_count = 0
+        response = {
+            "has_customer": False,
+            "belongs_to_customer": False,
+            "bread_index": None  # Will be set below
+        }
 
-    # Get customer reservation
-    reservation_str = reservations_map.get(str(customer_id))
-    if not reservation_str:
-        # Customer not found, clean up prep_state and return
-        await r.delete(prep_state_key)
-        return {"has_customer": False}
+    # ============================================================
+    # TIMING: Calculate bread metadata
+    # ============================================================
+    # Get last bread index from sorted set (highest score)
+    last_index = 0
+    if last_bread_data:
+        # last_bread_data format: [(b"timestamp:customer_id", score)]
+        last_index = int(last_bread_data[0][1])
 
-    counts = list(map(int, reservation_str.split(',')))
-    total_needed = sum(counts)
-
-    # Include ALL bread types (even if count is 0)
-    customer_breads = {bid: count for bid, count in zip(bread_ids_sorted, counts)}
-
-    # Calculate timing
-    last_index = int(last_bread_index or 0)
     baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
     now = datetime.now()
     now_ts = int(now.timestamp())
@@ -453,103 +512,69 @@ async def new_bread(
 
     time_diff = None
     if last_bread_time:
-        last_bread_time = int(float(last_bread_time))
-        time_diff = now_ts - last_bread_time
-
-    # Prepare bread value
-    bread_value = f"{bread_cook_date}:{customer_id}"
-
-    # Calculate next state after making this bread
-    bread_count += 1
-    is_next_customer = False
-    response_customer_id = customer_id
-    response_customer_breads = customer_breads
-    new_prep_state = None
-
-    if bread_count >= total_needed:
-        # Current customer complete, find next customer
-        is_next_customer = True
-        try:
-            current_idx = order_ids.index(customer_id)
-            if current_idx + 1 < len(order_ids):
-                response_customer_id = order_ids[current_idx + 1]
-                response_reservation_str = reservations_map.get(str(response_customer_id))
-
-                if response_reservation_str:
-                    response_counts = list(map(int, response_reservation_str.split(',')))
-                    # Include ALL bread types
-                    response_customer_breads = {
-                        bid: count
-                        for bid, count in zip(bread_ids_sorted, response_counts)
-                    }
-                    new_prep_state = f"{response_customer_id}:0"
-                else:
-                    # Next customer not found in reservations, clean up
-                    response_customer_id = None
-                    new_prep_state = None
-            else:
-                # No more customers
-                response_customer_id = None
-                new_prep_state = None
-        except ValueError:
-            # Current customer not in order, clean up
-            response_customer_id = None
-            new_prep_state = None
-    else:
-        # Continue with same customer
-        new_prep_state = f"{customer_id}:{bread_count}"
+        time_diff = now_ts - int(float(last_bread_time))
 
     # ============================================================
-    # TRIP 2: Write ALL changes in ONE transaction
+    # WRITE: Save everything to Redis
     # ============================================================
     pipe = r.pipeline(transaction=True)
-    pipe.set(last_bread_time_key, now_ts, ex=ttl)
-    pipe.zadd(breads_key, {bread_value: bread_index})
-    pipe.expire(breads_key, ttl)
-    pipe.set(last_bread_index_key, bread_index, ex=ttl)
 
+    # Save bread (only to Redis if it belongs to a customer)
+    if bread_belongs_to != 0:
+        bread_value = f"{bread_cook_date}:{bread_belongs_to}"
+        pipe.zadd(breads_key, {bread_value: bread_index})
+        pipe.expire(breads_key, ttl)
+
+    # Always update bread tracking metadata
+    pipe.set(last_bread_time_key, now_ts, ex=ttl)
+
+    # Save timing stats
     if time_diff is not None:
         pipe.zadd(bread_diff_key, {str(bread_index): time_diff})
         pipe.expire(bread_diff_key, ttl)
 
-    if new_prep_state:
-        pipe.set(prep_state_key, new_prep_state, ex=ttl)
+    # Update prep_state
+    if working_customer_id:
+        # Working on a customer - save progress
+        pipe.set(prep_state_key, f"{working_customer_id}:{breads_made}", ex=ttl)
+    elif last_completed_customer:
+        # No more customers, but keep last completed to prevent restart
+        pipe.set(prep_state_key, f"{last_completed_customer}:{get_customer_needs(last_completed_customer)}", ex=ttl)
     else:
+        # No customers at all
         pipe.delete(prep_state_key)
 
     await pipe.execute()
 
     # ============================================================
-    # ASYNC: Save to database (doesn't block response)
+    # ASYNC: Save to database
     # ============================================================
-    tasks.save_bread_to_db.delay(customer_id, bakery_id, bread_cook_date)
+    tasks.save_bread_to_db.delay(
+        bread_belongs_to if bread_belongs_to != 0 else None,
+        bakery_id,
+        bread_cook_date
+    )
 
     # ============================================================
-    # LOGGING
+    # LOG & RETURN
     # ============================================================
     logger.info(
         f"{FILE_NAME}:new_bread",
         extra={
             "bakery_id": bakery_id,
             "bread_index": bread_index,
-            "belongs_to": customer_id,
-            "bread_count": bread_count,
-            "total_needed": total_needed,
-            "is_next_customer": is_next_customer,
+            "belongs_to": bread_belongs_to,
+            "breads_made": breads_made if working_customer_id else None,
+            "customer_done": is_customer_done,
         }
     )
 
-    # ============================================================
-    # RESPONSE
-    # ============================================================
-    if not response_customer_id:
-        return {"has_customer": False}
+    # Add bread_index to response
+    if "bread_index" in response:
+        response["bread_index"] = bread_index
 
-    return {
-        "customer_id": response_customer_id,
-        "customer_breads": response_customer_breads,
-        "next_customer": is_next_customer
-    }
+    return response
+
 
 @router.get('/hardware_init')
 @handle_errors

@@ -122,6 +122,16 @@ def update_customers_status(db: Session, ticket_id: int, bakery_id: int, new_sta
     result = db.execute(stmt)
     return result
 
+def update_all_customers_status_to_false(db: Session, bakery_id: int):
+    stmt = (
+        update(models.Customer)
+        .where(models.Customer.bakery_id == bakery_id)
+        .values(is_in_queue=False)
+    )
+
+    result = db.execute(stmt)
+    return result
+
 def add_bakery(db: Session, bakery: schemas.AddBakery):
     bakery_db = models.Bakery(name=bakery.name, location=bakery.location, active=bakery.active, baking_time_s=bakery.baking_time_s)
     db.add(bakery_db)
@@ -413,38 +423,25 @@ def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | Non
 
 
 def get_customer_by_ticket_id(db, ticket_id: int, bakery_id: int):
-    """
-    Get customer by ticket_id (ticket number) and bakery_id
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
 
-    Args:
-        db: Database session
-        ticket_id: The ticket ID shown to customers
-        bakery_id: Bakery ID
-
-    Returns:
-        Customer object or None
-    """
     return db.query(models.Customer).filter(
         models.Customer.ticket_id == ticket_id,
-        models.Customer.bakery_id == bakery_id
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.is_in_queue == True,
+        models.Customer.register_date >= midnight_utc
     ).first()
 
 
-def create_bread(db, customer_internal_id: int, baked_at: datetime):
-    """
-    Create a new bread record
-
-    Args:
-        db: Database session
-        customer_internal_id: Internal customer.id (not ticket_id)
-        baked_at: DateTime when bread will be ready
-
-    Returns:
-        Created Bread object
-    """
-    bread = Bread(
+def create_bread(db, bakery_id:int, customer_internal_id: int, baked_at: datetime, consumed: bool = False):
+    bread = models.Bread(
         belongs_to=customer_internal_id,
-        baked_at=baked_at
+        baked_at=baked_at,
+        bakery_id=bakery_id,
+        consumed=consumed
     )
     db.add(bread)
     db.commit()
@@ -453,21 +450,44 @@ def create_bread(db, customer_internal_id: int, baked_at: datetime):
 
 
 def get_today_breads(db, bakery_id: int):
-    """
-    Get all breads created today for a specific bakery
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
 
-    Args:
-        db: Database session
-        bakery_id: Bakery ID
 
-    Returns:
-        List of Bread objects
-    """
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    return db.query(models.Bread).filter(
+        models.Bread.bakery_id == bakery_id,
+        models.Bread.enter_date >= midnight_utc,
+        models.Bread.consumed == False
+    ).all()
+
+
+def consume_breads_for_customer_today(db: Session, bakery_id: int, ticket_id: int) -> int:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    customer = db.query(models.Customer).filter(
+        models.Customer.ticket_id == ticket_id,
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.register_date >= midnight_utc
+    ).first()
+
+    if not customer:
+        return 0
+
+    stmt = (
+        update(models.Bread)
+        .where(models.Bread.bakery_id == bakery_id)
+        .where(models.Bread.belongs_to == customer.id)
+        .where(models.Bread.enter_date >= midnight_utc)
+        .where(models.Bread.consumed.is_(False))
+        .values(consumed=True)
+        .returning(models.Bread.id)
     )
 
-    return db.query(models.Bread).join(models.Customer).filter(
-        models.Customer.bakery_id == bakery_id,
-        models.Bread.enter_date >= today_start
-    ).all()
+    result = db.execute(stmt).scalars().all()
+    db.commit()
+    return len(result)

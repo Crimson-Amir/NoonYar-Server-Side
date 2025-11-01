@@ -89,6 +89,12 @@ services:
       db:
         condition: service_healthy
 
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 30
+
 volumes:
   postgres_data:
   redis_data:

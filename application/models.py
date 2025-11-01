@@ -46,6 +46,7 @@ class Bakery(Base):
     bread_associations = relationship("BakeryBread", back_populates="bakery", cascade="all, delete-orphan")
     bread_cook_time_log_associations = relationship("BreadCookTimeLog", back_populates="bakery", cascade="all, delete-orphan")
     customers = relationship("Customer", back_populates="bakery")
+    breads_associations = relationship("Bread", back_populates="bakery")
 
 
 class BreadType(Base):
@@ -99,7 +100,7 @@ class Customer(Base):
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
     wait_list_associations = relationship("WaitList", back_populates="customer", cascade="all, delete-orphan")
     upcoming_associations = relationship("UpcomingCustomer", back_populates="customer", cascade="all, delete-orphan")
-    breads = relationship("Bread", back_populates="customer", cascade="all, delete-orphan")
+    breads_associations = relationship("Bread", back_populates="customer", cascade="all, delete-orphan")
     bakery = relationship("Bakery", back_populates="customers")
 
 
@@ -155,8 +156,12 @@ class Bread(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     enter_date = Column(DateTime, default=lambda: datetime.now(UTC))
     baked_at = Column(DateTime, nullable=False)
-    belongs_to = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), nullable=False)
-    customer = relationship("Customer", back_populates="breads")
+    belongs_to = Column(Integer, ForeignKey('customer.id', ondelete='CASCADE'), nullable=True)
+    consumed = Column(Boolean, default=False)
+    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'))
+    customer = relationship("Customer", back_populates="breads_associations")
+    bakery = relationship("Bakery", back_populates="breads_associations")
+
 
 # class OTP(Base):
 #     __tablename__ = 'otp_table'

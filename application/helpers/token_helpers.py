@@ -2,6 +2,7 @@ import datetime, jwt
 from application import crud
 from application.database import SessionLocal
 import logging
+from fastapi import HTTPException
 
 logging.getLogger("application")
 bakery_token = {}
@@ -15,7 +16,7 @@ def get_token(bakery_id):
         try:
             bakery = crud.get_bakery(db, bakery_id)
             if not bakery:
-                raise ValueError('No bakery found')
+                raise HTTPException(status_code=404, detail='No bakery found')
             bakery_token[bakery_id] = bakery.token
         finally:
             db.close()

@@ -159,6 +159,8 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
             await redis_helper.initialize_redis_sets(r, bakery_id)
             if mid_night:
                 await redis_helper.initialize_redis_sets_only_12_oclock(r, bakery_id)
+                with session_scope as db:
+                    crud.update_all_customers_status_to_false(db, bakery_id)
         finally:
             await r.close()
 
@@ -216,26 +218,15 @@ def calculate_new_time_per_bread(self, bakery_id):
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def save_bread_to_db(self, customer_ticket_id, bakery_id, baked_at_timestamp):
-    """
-    Save bread to database
-
-    Args:
-        customer_ticket_id: Hardware customer ID (ticket number)
-        bakery_id: Bakery ID
-        baked_at_timestamp: Unix timestamp when bread will be ready
-    """
+def save_bread_to_db(self, ticket_id, bakery_id, baked_at_timestamp):
     with session_scope() as db:
-        # Get internal customer ID from hardware customer ID
-        customer = crud.get_customer_by_ticket_id(db, customer_ticket_id, bakery_id)
-        if customer:
-            baked_at = datetime.fromtimestamp(baked_at_timestamp, tz=UTC)
-            crud.create_bread(db, customer.id, baked_at)
-        else:
-            celery_logger.warning(
-                f"Customer not found for bread creation",
-                extra={
-                    "customer_ticket_id": customer_ticket_id,
-                    "bakery_id": bakery_id
-                }
-            )
+        customer_id = None
+        consumed = True
+        if ticket_id != 0:
+            customer = crud.get_customer_by_ticket_id(db, ticket_id, bakery_id)
+            if customer:
+                consumed = False
+                customer_id = customer.id
+
+        baked_at = datetime.fromtimestamp(baked_at_timestamp, tz=UTC)
+        crud.create_bread(db, bakery_id, customer_id, baked_at, consumed)
