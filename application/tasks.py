@@ -158,7 +158,7 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
             await redis_helper.initialize_redis_sets(r, bakery_id)
             if mid_night:
                 await redis_helper.initialize_redis_sets_only_12_oclock(r, bakery_id)
-                with session_scope as db:
+                with session_scope() as db:
                     crud.update_all_customers_status_to_false(db, bakery_id)
         finally:
             await r.close()
