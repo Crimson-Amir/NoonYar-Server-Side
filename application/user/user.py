@@ -63,7 +63,7 @@ async def queue_check(request: Request, b: int, t: int):
     is_user_exist = t in reservation_keys
 
     if not is_user_exist:
-        raise HTTPException(status_code=403, detail="Bread does not Exist")
+        raise HTTPException(status_code=403, detail="User does not Exist")
 
     reservation_number = t if is_user_exist else reservation_keys[-1]
 
