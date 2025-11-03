@@ -215,6 +215,13 @@ async def send_ticket_to_wait_list(
         if not status: raise HTTPException(status_code=401, detail="invalid customer_id")
 
     await redis_helper.add_customer_to_wait_list(r, bakery_id, customer_id, reservations_str=current_customer_reservation)
+    
+    # Consume breads for this customer before rebuilding prep_state
+    removed = await redis_helper.consume_ready_breads(r, bakery_id, customer_id)
+    
+    # Rebuild prep_state immediately after removing customer to prevent race condition
+    # where new_bread endpoint reads stale prep_state with removed customer ID
+    await redis_helper.rebuild_prep_state(r, bakery_id)
 
     next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(r, bakery_id)
     next_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, next_ticket_id, return_error=False)
@@ -229,8 +236,6 @@ async def send_ticket_to_wait_list(
     if any(bread in time_per_bread.keys() for bread in upcoming_breads):
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
         tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
-
-    removed = await redis_helper.consume_ready_breads(r, bakery_id, customer_id)
 
     # Mark breads as consumed in the database as well
     with SessionLocal() as db:
