@@ -43,7 +43,10 @@ class AddBakery(BaseModel):
     baking_time_s: int = 600
 
 class ModifyBakery(BakeryID):
-    active: bool
+    name: str | None = None
+    location: str | None = None
+    active: bool | None = None
+    baking_time_s: int | None = None
 
 class AddBakeryResult(BakeryID):
     token: str

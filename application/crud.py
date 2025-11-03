@@ -110,17 +110,20 @@ def new_customer_to_upcoming_customers(db: Session, customer_id):
     db.add(upcoming_customer)
     return upcoming_customer
 
-def update_customers_status(db: Session, ticket_id: int, bakery_id: int, new_status: bool):
+def update_customer_status(db: Session, ticket_id: int, bakery_id: int, new_status: bool):
     stmt = (
         update(models.Customer)
-        .where(models.Customer.ticket_id <= ticket_id)
+        .where(models.Customer.ticket_id == ticket_id)
         .where(models.Customer.bakery_id == bakery_id)
         .values(is_in_queue=new_status)
         .returning(models.Customer.id)
     )
 
     result = db.execute(stmt)
-    return result
+    db.commit()
+    customer_id = result.scalar_one_or_none()
+
+    return customer_id
 
 def update_all_customers_status_to_false(db: Session, bakery_id: int):
     stmt = (
@@ -139,11 +142,21 @@ def add_bakery(db: Session, bakery: schemas.AddBakery):
     db.refresh(bakery_db)
     return bakery_db
 
-def change_bakery_status(db: Session, bakery_schema: schemas.ModifyBakery):
-    bakery = db.query(models.Bakery).filter(models.Bakery.bakery_id == bakery_schema.bakery_id).first()
+def modify_bakery(db: Session, bakery_schema: schemas.ModifyBakery):
+    bakery = (
+        db.query(models.Bakery)
+        .filter(models.Bakery.bakery_id == bakery_schema.bakery_id)
+        .first()
+    )
     if not bakery:
         return None
-    bakery.active = bakery_schema.active
+
+    update_data = bakery_schema.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "bakery_id":
+            continue
+        setattr(bakery, field, value)
+
     db.commit()
     return bakery
 

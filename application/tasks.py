@@ -91,7 +91,7 @@ def remove_customer_from_upcoming_customers(self, customer_ticket_id, bakery_id)
 @handle_task_errors
 def next_ticket_process(self, ticket_id, bakery_id):
     with session_scope() as db:
-        crud.update_customers_status(db, ticket_id, bakery_id, False)
+        crud.update_customer_status(db, ticket_id, bakery_id, False)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
@@ -105,8 +105,7 @@ def serve_wait_list_ticket(self, ticket_id, bakery_id):
 @handle_task_errors
 def send_ticket_to_wait_list(self, ticket_id, bakery_id):
     with session_scope() as db:
-        customer = crud.update_customers_status(db, ticket_id, bakery_id, False)
-        customer_id = max(row[0] for row in customer)
+        customer_id = crud.update_customer_status(db, ticket_id, bakery_id, False)
         crud.add_new_ticket_to_wait_list(db, customer_id, True)
 
 

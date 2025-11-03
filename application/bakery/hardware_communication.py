@@ -19,7 +19,7 @@ def validate_token(authorization: str = Header(...)) -> str:
         raise HTTPException(status_code=400, detail="Invalid or missing Authorization header")
     return authorization[len("Bearer "):]
 
-@router.put('/new_ticket')
+@router.post('/new_ticket')
 @handle_errors
 async def new_ticket(
         request: Request,
@@ -406,9 +406,10 @@ async def new_bread(
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
     pipe.zrange(order_key, 0, -1)
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')  # Get all breads to count per customer
 
     prep_state_str, baking_time_s_raw, last_bread_time, last_bread_data, \
-        time_per_bread, reservations_map, order_ids = await pipe.execute()
+        time_per_bread, reservations_map, order_ids, all_breads = await pipe.execute()
 
     # ============================================================
     # PARSE: Convert Redis data to usable format
@@ -416,6 +417,13 @@ async def new_bread(
     order_ids = [int(x) for x in order_ids] if order_ids else []
     time_per_bread = {k: int(v) for k, v in time_per_bread.items()} if time_per_bread else {}
     bread_ids_sorted = sorted(time_per_bread.keys())
+    
+    # Count breads already made per customer
+    breads_per_customer = {}
+    for bread_value in all_breads:
+        if ':' in bread_value:
+            cid = int(bread_value.split(':')[1])
+            breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
 
     # ============================================================
     # LOGIC: Determine which customer we're working on
@@ -441,29 +449,62 @@ async def new_bread(
             return {}
         counts = list(map(int, reservations_map[str(customer_id)].split(',')))
         return {bid: count for bid, count in zip(bread_ids_sorted, counts)}
+    
+    def find_next_incomplete_customer(after_customer_id=None):
+        """Find next incomplete customer in queue, optionally starting after a given customer."""
+        start_idx = 0
+        if after_customer_id:
+            try:
+                start_idx = order_ids.index(after_customer_id) + 1
+            except ValueError:
+                start_idx = 0
+        
+        for i in range(start_idx, len(order_ids)):
+            customer_id = order_ids[i]
+            needed = get_customer_needs(customer_id)
+            already_made = breads_per_customer.get(customer_id, 0)
+            if already_made < needed:
+                return customer_id
+        return None
 
-    # Parse current prep state
+    # Determine which customer to work on
+    # Priority: Continue with customer from prep_state if they're still incomplete
+    # Otherwise: Find first incomplete customer from beginning of queue
     working_customer_id = None
     breads_made = 0
     last_completed_customer = None
 
     if prep_state_str and order_ids:
+        # Check if we're currently working on a customer
         state_customer_id, state_bread_count = map(int, prep_state_str.split(':'))
-        needed = get_customer_needs(state_customer_id)
-
-        if state_bread_count >= needed:
-            # Current customer complete, move to next
-            last_completed_customer = state_customer_id
-            working_customer_id = get_next_customer_after(state_customer_id)
-            breads_made = 0
-        else:
-            # Continue with current customer
-            working_customer_id = state_customer_id
-            breads_made = state_bread_count
-    elif order_ids:
-        # No prep_state, start with first customer
-        working_customer_id = order_ids[0]
-        breads_made = 0
+        
+        # Verify this customer still exists in the queue and is incomplete
+        if state_customer_id in order_ids:
+            needed = get_customer_needs(state_customer_id)
+            already_made = breads_per_customer.get(state_customer_id, 0)
+            
+            if already_made < needed:
+                # Continue with this customer (don't jump to earlier insertions)
+                working_customer_id = state_customer_id
+                breads_made = already_made
+            else:
+                # This customer is now complete
+                last_completed_customer = state_customer_id
+    
+    # If no valid customer from prep_state, scan from beginning
+    if working_customer_id is None and order_ids:
+        for customer_id in order_ids:
+            needed = get_customer_needs(customer_id)
+            already_made = breads_per_customer.get(customer_id, 0)
+            
+            if already_made < needed:
+                # Found first incomplete customer
+                working_customer_id = customer_id
+                breads_made = already_made
+                break
+            else:
+                # This customer is complete
+                last_completed_customer = customer_id
 
     # ============================================================
     # ACTION: Make this bread
@@ -476,15 +517,21 @@ async def new_bread(
     is_customer_done = breads_made >= customer_needs if working_customer_id else False
 
     if is_customer_done:
-        next_customer = get_next_customer_after(working_customer_id)
+        # Customer is complete after this bread - find next incomplete customer
+        # We need to update breads_per_customer temporarily to reflect the bread we just made
+        # so we can correctly find the next incomplete customer
+        if working_customer_id:
+            breads_per_customer[working_customer_id] = breads_made
+        
+        # Search from beginning to handle out-of-order insertions (e.g., tickets 1,3 done, then 2 added)
+        next_customer = find_next_incomplete_customer(after_customer_id=None)
         response = {
             "customer_id": next_customer,
             "customer_breads": get_customer_breads_dict(next_customer),
-            "next_customer": True
+            "next_customer": True,
         } if next_customer else {
             "has_customer": False,
             "belongs_to_customer": True,
-            "bread_index": None  # Will be set below
         }
     elif working_customer_id:
         response = {
@@ -496,7 +543,6 @@ async def new_bread(
         response = {
             "has_customer": False,
             "belongs_to_customer": False,
-            "bread_index": None  # Will be set below
         }
 
     # ============================================================
@@ -575,8 +621,7 @@ async def new_bread(
     )
 
     # Add bread_index to response
-    if "bread_index" in response:
-        response["bread_index"] = bread_index
+    response["bread_index"] = bread_index
 
     return response
 
