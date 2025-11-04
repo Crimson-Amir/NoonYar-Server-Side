@@ -21,6 +21,7 @@ REDIS_KEY_BREADS = f"{REDIS_KEY_PREFIX}:breads"
 REDIS_KEY_LAST_BREAD_TIME = f"{REDIS_KEY_PREFIX}:last_bread_time"
 REDIS_KEY_BREAD_TIME_DIFFS = f"{REDIS_KEY_PREFIX}:bread_time_diff"
 REDIS_KEY_PREP_STATE = f"{REDIS_KEY_PREFIX}:prep_state"
+REDIS_KEY_DISPLAY_CUSTOMER = f"{REDIS_KEY_PREFIX}:display_customer"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
 async def handle_time_per_bread(r, bakery_id):
@@ -595,6 +596,7 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_timeout_second(r, bakery_id, fetch_from_redis_first=False)
     await load_breads_from_db(r, bakery_id)
     await rebuild_prep_state(r, bakery_id)
+    await rebuild_display_state(r, bakery_id)
 
 async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
     await reset_timeout(r, bakery_id)
@@ -613,6 +615,7 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_TIMEOUT_SEC.format(bakery_id),
         REDIS_KEY_PREP_STATE.format(bakery_id),
         REDIS_KEY_BREADS.format(bakery_id),
+        REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id),
     ]
 
     pipe = r.pipeline(transaction=True)
@@ -882,3 +885,50 @@ async def rebuild_prep_state(r, bakery_id: int):
     await r.set(prep_state_key, f"{last_customer_id}:{last_customer_total}", ex=ttl)
     print(
         f"All customers complete for bakery {bakery_id}, set prep_state to last customer {last_customer_id}:{last_customer_total}")
+
+
+async def set_display_flag(r, bakery_id: int):
+    """
+    Set flag to show customer info on display.
+    This means baker should see bread requirements for next customer.
+    """
+    display_key = REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id)
+    ttl = seconds_until_midnight_iran()
+    await r.set(display_key, "1", ex=ttl)
+
+
+async def clear_display_flag(r, bakery_id: int):
+    """Clear the display flag (baker started baking)."""
+    display_key = REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id)
+    await r.delete(display_key)
+
+
+async def should_show_on_display(r, bakery_id: int) -> bool:
+    """
+    Check if we should show customer info on display.
+    True if: display flag is set (no breads being prepared)
+    """
+    display_key = REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id)
+    has_display_flag = await r.exists(display_key)
+    return bool(has_display_flag)
+
+
+async def rebuild_display_state(r, bakery_id: int):
+    """
+    Rebuild display state after server restart.
+    
+    Logic:
+    - If breads are being prepared: clear flag (baker is working)
+    - If no breads being prepared: set flag (show display)
+    """
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    bread_count = await r.zcard(breads_key)
+    
+    if bread_count == 0:
+        # No breads being prepared - set flag to show display
+        await set_display_flag(r, bakery_id)
+        print(f"Set display flag for bakery {bakery_id} (no breads in preparation)")
+    else:
+        # Breads are being prepared - clear flag
+        await clear_display_flag(r, bakery_id)
+        print(f"Cleared display flag for bakery {bakery_id} ({bread_count} breads in preparation)")
