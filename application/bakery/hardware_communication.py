@@ -33,6 +33,9 @@ async def new_ticket(
 
     r = request.app.state.redis
     bread_requirements = customer.bread_requirements
+    bread_count = sum(customer.bread_requirements.values())
+    if bread_count <= 0:
+        raise HTTPException(status_code=400, detail="Ticket should have at least one bread")
     breads_type, reservation_dict, upcoming_set = await redis_helper.get_bakery_runtime_state(r, bakery_id)
     if breads_type.keys() != bread_requirements.keys():
         raise HTTPException(status_code=400, detail="Invalid bread types")
