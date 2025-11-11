@@ -45,8 +45,8 @@ class Bakery(Base):
     timeout_sec = Column(Integer, nullable=False, default=0)
     bread_associations = relationship("BakeryBread", back_populates="bakery", cascade="all, delete-orphan")
     bread_cook_time_log_associations = relationship("BreadCookTimeLog", back_populates="bakery", cascade="all, delete-orphan")
-    customers = relationship("Customer", back_populates="bakery")
-    breads_associations = relationship("Bread", back_populates="bakery")
+    customers = relationship("Customer", back_populates="bakery", cascade="all, delete-orphan")
+    breads_associations = relationship("Bread", back_populates="bakery", cascade="all, delete-orphan")
 
 
 class BreadType(Base):

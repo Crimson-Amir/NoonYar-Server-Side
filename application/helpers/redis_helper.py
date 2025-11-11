@@ -616,6 +616,8 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_PREP_STATE.format(bakery_id),
         REDIS_KEY_BREADS.format(bakery_id),
         REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id),
+        REDIS_KEY_LAST_BREAD_TIME.format(bakery_id),
+        REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id),
     ]
 
     pipe = r.pipeline(transaction=True)
