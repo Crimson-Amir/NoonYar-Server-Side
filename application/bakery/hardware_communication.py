@@ -234,9 +234,12 @@ async def send_ticket_to_wait_list(
     next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(r, bakery_id)
     next_ticket_id = await redis_helper.check_current_ticket_id(r, bakery_id, next_ticket_id, return_error=False)
     next_user_detail = {}
+    if not time_per_bread:
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
+
     if next_ticket_id:
         customer_reservation = await redis_helper.get_customer_reservation(r, bakery_id, next_ticket_id)
-        time_per_bread, customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
+        customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
     tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id)
@@ -649,11 +652,7 @@ async def new_bread(
 @router.get('/hardware_init')
 @handle_errors
 async def hardware_initialize(request: Request, bakery_id: int):
-    db = SessionLocal()
-    try:
-        return await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
-    finally:
-        db.close()
+    return await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
 
 
 @router.put('/timeout/update')

@@ -24,13 +24,6 @@ REDIS_KEY_PREP_STATE = f"{REDIS_KEY_PREFIX}:prep_state"
 REDIS_KEY_DISPLAY_CUSTOMER = f"{REDIS_KEY_PREFIX}:display_customer"
 REDIS_KEY_BREAD_NAMES = "bread_names"
 
-async def handle_time_per_bread(r, bakery_id):
-    time_per_bread = await get_bakery_time_per_bread(r, bakery_id, fetch_from_redis_first=False)
-    if not time_per_bread:
-        raise HTTPException(status_code=404, detail={"error": "empty bread type"})
-    return time_per_bread
-
-
 async def get_bakery_runtime_state(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
@@ -44,7 +37,7 @@ async def get_bakery_runtime_state(r, bakery_id):
     reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservation_dict.items()} if reservation_dict else {}
 
     if not breads_type:
-        breads_type = await handle_time_per_bread(r, bakery_id)
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
 
     upcoming_set = set(upcoming_members) if upcoming_members else None
 
@@ -115,8 +108,6 @@ async def check_for_correct_current_id(customer_id, current_ticket_id):
         )
 
 async def get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread, customer_reservations):
-    if not time_per_bread:
-        time_per_bread = await handle_time_per_bread(r, bakery_id)
 
     if not customer_reservations:
         get_from_db = await get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
@@ -125,7 +116,7 @@ async def get_current_cusomter_detail(r, bakery_id, customer_id, time_per_bread,
     else:
         customer_reservations = list(map(int, customer_reservations.split(",")))
 
-    return time_per_bread, customer_reservations
+    return customer_reservations
 
 async def remove_customer_id_from_reservation(r, bakery_id, customer_id):
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
