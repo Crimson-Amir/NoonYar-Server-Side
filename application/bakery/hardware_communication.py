@@ -33,9 +33,15 @@ async def new_ticket(
 
     r = request.app.state.redis
     bread_requirements = customer.bread_requirements
+
     bread_count = sum(customer.bread_requirements.values())
+
+    if any(v < 0 for v in customer.bread_requirements.values()):
+        raise HTTPException(status_code=400, detail="Bread values cannot be negative")
+
     if bread_count <= 0:
         raise HTTPException(status_code=400, detail="Ticket should have at least one bread")
+
     breads_type, reservation_dict, upcoming_set = await redis_helper.get_bakery_runtime_state(r, bakery_id)
     if breads_type.keys() != bread_requirements.keys():
         raise HTTPException(status_code=400, detail="Invalid bread types")
@@ -277,112 +283,6 @@ async def is_ticket_in_wait_list(
     return {
         "is_ticket_in_wait_list": status
     }
-
-
-@router.get('/upcoming/{bakery_id}')
-@handle_errors
-async def get_upcoming_customer(
-        request: Request,
-        bakery_id: int,
-        token: str = Depends(validate_token)
-):
-    if not token_helpers.verify_bakery_token(token, bakery_id):
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    r = request.app.state.redis
-
-    cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
-    zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
-
-    # Fetch both in one roundtrip
-    pipe = r.pipeline()
-    pipe.get(cur_key)
-    pipe.zrange(zkey, 0, 0)
-    cur_val, zmembers = await pipe.execute()
-
-    if cur_val:
-        customer_id = int(cur_val)
-    elif zmembers:
-        customer_id = int(zmembers[0])
-    else:
-        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
-        return {"empty_upcoming": True}
-
-    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
-    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-    baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
-    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-    upcoming_breads_key = redis_helper.REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
-
-    pipe = r.pipeline()
-    pipe.hgetall(time_key)
-    pipe.hgetall(res_key)
-    pipe.get(baking_time_key)
-    pipe.zrange(order_key, 0, -1)
-    pipe.smembers(upcoming_breads_key)
-    time_per_bread, reservations_map, baking_time_s_raw, order_ids, upcoming_breads = await pipe.execute()
-
-    if time_per_bread:
-        time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
-
-    if not time_per_bread or not order_ids:
-        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
-        return {"empty_upcoming": True}
-
-    reservation_str = reservations_map.get(str(customer_id)) if reservations_map else None
-
-    if not reservation_str:
-        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
-        return {"empty_upcoming": True}
-
-    counts = [int(x) for x in reservation_str.split(',')]
-    keys = [int(x) for x in order_ids]
-    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
-
-    upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
-
-
-    reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
-
-    sorted_keys = sorted(time_per_bread.keys())
-    time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
-    alg = algorithm.Algorithm()
-    max_bread_time = max(time_per_bread.values())
-    in_queue_time = await alg.calculate_in_queue_customers_time(
-        keys, customer_id, reservation_dict, time_per_bread_list, r=r, bakery_id=bakery_id
-    )
-
-    empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict) * max_bread_time)
-    delivery_time_s = in_queue_time + empty_slot_time
-    preparation_time = alg.compute_bread_time(time_per_bread_list, counts)
-
-    notification_lead_time_s = preparation_time + baking_time_s
-    is_ready = delivery_time_s <= notification_lead_time_s
-
-    response = {
-        "empty_upcoming": False,
-        "ready_to_show": False
-    }
-
-    if is_ready and cur_val is None:
-        customer_breads = dict(zip(time_per_bread.keys(), counts))
-        upcoming_customer_breads = {
-            bread_id: qty
-            for bread_id, qty in customer_breads.items()
-            if bread_id in upcoming_breads_set
-        }
-        response['customer_id'] = customer_id
-        response["breads"] = upcoming_customer_breads
-        response['ready_to_show'] = True
-        response['preparation_time'] = preparation_time
-
-        await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
-            r, bakery_id, customer_id, preparation_time
-        )
-        tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
-
-    return response
-
 
 @router.post('/new_bread/{bakery_id}')
 @handle_errors
@@ -652,30 +552,136 @@ async def new_bread(
 @router.get('/hardware_init')
 @handle_errors
 async def hardware_initialize(request: Request, bakery_id: int):
-    return await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
-
-
-@router.put('/timeout/update')
-@handle_errors
-async def update_timeout(
-        request: Request,
-        data: schemas.UpdateTimeoutRequest,
-        token: str = Depends(validate_token)
- ):
-    bakery_id = data.bakery_id
-    if not token_helpers.verify_bakery_token(token, bakery_id):
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    with SessionLocal() as db:
-        with db.begin():
-            new_timeout = crud.update_timeout_second(db, bakery_id, data.seconds)
-            if new_timeout is None:
-                raise HTTPException(status_code=404, detail='Bakery not found')
-
-    # Update Redis
-    r = request.app.state.redis
-    await redis_helper.update_timeout(r, bakery_id, new_timeout)
-
-    logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
-    return {"timeout_sec": new_timeout}
-
+    time_per_bread = await redis_helper.get_bakery_time_per_bread(request.app.state.redis, bakery_id)
+    if not time_per_bread:
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
+    return time_per_bread
+#
+# @router.put('/timeout/update')
+# @handle_errors
+# async def update_timeout(
+#         request: Request,
+#         data: schemas.UpdateTimeoutRequest,
+#         token: str = Depends(validate_token)
+#  ):
+#     bakery_id = data.bakery_id
+#     if not token_helpers.verify_bakery_token(token, bakery_id):
+#         raise HTTPException(status_code=401, detail="Invalid token")
+#
+#     with SessionLocal() as db:
+#         with db.begin():
+#             new_timeout = crud.update_timeout_second(db, bakery_id, data.seconds)
+#             if new_timeout is None:
+#                 raise HTTPException(status_code=404, detail='Bakery not found')
+#
+#     # Update Redis
+#     r = request.app.state.redis
+#     await redis_helper.update_timeout(r, bakery_id, new_timeout)
+#
+#     logger.info(f"{FILE_NAME}:update_timeout", extra={"bakery_id": bakery_id, "timeout_min": new_timeout})
+#     return {"timeout_sec": new_timeout}
+#
+#
+# @router.get('/upcoming/{bakery_id}')
+# @handle_errors
+# async def get_upcoming_customer(
+#         request: Request,
+#         bakery_id: int,
+#         token: str = Depends(validate_token)
+# ):
+#     if not token_helpers.verify_bakery_token(token, bakery_id):
+#         raise HTTPException(status_code=401, detail="Invalid token")
+#
+#     r = request.app.state.redis
+#
+#     cur_key = redis_helper.REDIS_KEY_CURRENT_UPCOMING_CUSTOMER.format(bakery_id)
+#     zkey = redis_helper.REDIS_KEY_UPCOMING_CUSTOMERS.format(bakery_id)
+#
+#     # Fetch both in one roundtrip
+#     pipe = r.pipeline()
+#     pipe.get(cur_key)
+#     pipe.zrange(zkey, 0, 0)
+#     cur_val, zmembers = await pipe.execute()
+#
+#     if cur_val:
+#         customer_id = int(cur_val)
+#     elif zmembers:
+#         customer_id = int(zmembers[0])
+#     else:
+#         await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
+#         return {"empty_upcoming": True}
+#
+#     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+#     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+#     baking_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
+#     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+#     upcoming_breads_key = redis_helper.REDIS_KEY_UPCOMING_BREADS.format(bakery_id)
+#
+#     pipe = r.pipeline()
+#     pipe.hgetall(time_key)
+#     pipe.hgetall(res_key)
+#     pipe.get(baking_time_key)
+#     pipe.zrange(order_key, 0, -1)
+#     pipe.smembers(upcoming_breads_key)
+#     time_per_bread, reservations_map, baking_time_s_raw, order_ids, upcoming_breads = await pipe.execute()
+#
+#     if time_per_bread:
+#         time_per_bread = {int(k): int(v) for k, v in time_per_bread.items()}
+#
+#     if not time_per_bread or not order_ids:
+#         await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
+#         return {"empty_upcoming": True}
+#
+#     reservation_str = reservations_map.get(str(customer_id)) if reservations_map else None
+#
+#     if not reservation_str:
+#         await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
+#         return {"empty_upcoming": True}
+#
+#     counts = [int(x) for x in reservation_str.split(',')]
+#     keys = [int(x) for x in order_ids]
+#     baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
+#
+#     upcoming_breads_set = {int(x) for x in upcoming_breads}  # convert to int
+#
+#
+#     reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
+#
+#     sorted_keys = sorted(time_per_bread.keys())
+#     time_per_bread_list = [time_per_bread[k] for k in sorted_keys]
+#     alg = algorithm.Algorithm()
+#     max_bread_time = max(time_per_bread.values())
+#     in_queue_time = await alg.calculate_in_queue_customers_time(
+#         keys, customer_id, reservation_dict, time_per_bread_list, r=r, bakery_id=bakery_id
+#     )
+#
+#     empty_slot_time = min(300, alg.compute_empty_slot_time(keys, customer_id, reservation_dict) * max_bread_time)
+#     delivery_time_s = in_queue_time + empty_slot_time
+#     preparation_time = alg.compute_bread_time(time_per_bread_list, counts)
+#
+#     notification_lead_time_s = preparation_time + baking_time_s
+#     is_ready = delivery_time_s <= notification_lead_time_s
+#
+#     response = {
+#         "empty_upcoming": False,
+#         "ready_to_show": False
+#     }
+#
+#     if is_ready and cur_val is None:
+#         customer_breads = dict(zip(time_per_bread.keys(), counts))
+#         upcoming_customer_breads = {
+#             bread_id: qty
+#             for bread_id, qty in customer_breads.items()
+#             if bread_id in upcoming_breads_set
+#         }
+#         response['customer_id'] = customer_id
+#         response["breads"] = upcoming_customer_breads
+#         response['ready_to_show'] = True
+#         response['preparation_time'] = preparation_time
+#
+#         await redis_helper.remove_customer_from_upcoming_customers_and_add_to_current_upcoming_customer(
+#             r, bakery_id, customer_id, preparation_time
+#         )
+#         tasks.remove_customer_from_upcoming_customers.delay(customer_id, bakery_id)
+#
+#     return response
