@@ -121,5 +121,5 @@ async def queue_check(request: Request, b: int, t: int):
         "empty_slot_time_avg": empty_slot_time,
         "in_queue_customers_time": in_queue_customers_time,
         "user_breads": user_breads_persian,
-        "data": data
+        # "data": data
     }
