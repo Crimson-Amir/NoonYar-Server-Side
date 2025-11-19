@@ -26,8 +26,8 @@ async def home(request: Request):
 @handle_errors
 async def queue_check(request: Request, b: int, t: int):
     """Check the queue status for a bakery and a target reservation number."""
-    access_token = request.cookies.get('access_token')
-    data = decode_token(access_token)
+    # access_token = request.cookies.get('access_token')
+    # data = decode_token(access_token)
     r = request.app.state.redis
 
     # Redis keys
@@ -51,7 +51,7 @@ async def queue_check(request: Request, b: int, t: int):
 
     # Quick validation
     if not bread_time:
-        return {'msg': 'bakery does not exist'}
+        return {'msg': 'bakery does not have any bread'}
     if not reservation_dict:
         return {'msg': 'queue is empty'}
 
