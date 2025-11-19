@@ -51,7 +51,7 @@ async def queue_check(request: Request, b: int, t: int):
 
     # Quick validation
     if not bread_time:
-        return {'msg': 'bakery does not have any bread'}
+        return {'msg': 'bakery does not exist or does not have any bread'}
     if not reservation_dict:
         return {'msg': 'queue is empty'}
 
