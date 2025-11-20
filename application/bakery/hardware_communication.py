@@ -434,24 +434,28 @@ async def new_bread(
         # so we can correctly find the next incomplete customer
         if working_customer_id:
             breads_per_customer[working_customer_id] = breads_made
-        
+
         # Search from beginning to handle out-of-order insertions (e.g., tickets 1,3 done, then 2 added)
         next_customer = find_next_incomplete_customer(after_customer_id=None)
 
-        # If there is no next incomplete customer, this bread just finished
-        # the last active customer. System is now idle -> enable display flag
-        # so the next new_ticket can show breads on the cook display.
-        if next_customer is None and working_customer_id:
-            await redis_helper.set_display_flag(r, bakery_id)
+        if next_customer:
+            # There is another incomplete customer after this one
+            response = {
+                "customer_id": next_customer,
+                "customer_breads": get_customer_breads_dict(next_customer),
+                "next_customer": True,
+            }
+        else:
+            # No more incomplete customers: this bread was the last bread
+            # of the last customer. System is now idle -> set display flag
+            # so the next new_ticket can show breads on the cook display.
+            if working_customer_id:
+                await redis_helper.set_display_flag(r, bakery_id)
 
-        response = {
-            "customer_id": next_customer,
-            "customer_breads": get_customer_breads_dict(next_customer),
-            "next_customer": True,
-        } if next_customer else {
-            "has_customer": False,
-            "belongs_to_customer": True,
-        }
+            response = {
+                "has_customer": False,
+                "belongs_to_customer": True,
+            }
     elif working_customer_id:
         response = {
             "customer_id": working_customer_id,
@@ -515,13 +519,6 @@ async def new_bread(
         pipe.delete(prep_state_key)
 
     await pipe.execute()
-
-    # ============================================================
-    # DISPLAY: Manage display flag
-    # ============================================================
-    # Clear display flag when baker starts baking (first bread for a customer)
-    if working_customer_id and breads_made == 1:
-        await redis_helper.clear_display_flag(r, bakery_id)
 
     # ============================================================
     # ASYNC: Save to database
