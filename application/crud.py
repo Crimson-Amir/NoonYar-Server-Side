@@ -110,12 +110,13 @@ def new_customer_to_upcoming_customers(db: Session, customer_id):
     db.add(upcoming_customer)
     return upcoming_customer
 
-def update_customer_status(db: Session, ticket_id: int, bakery_id: int, new_status: bool):
+def update_customer_status_to_false(db: Session, ticket_id: int, bakery_id: int):
     stmt = (
         update(models.Customer)
         .where(models.Customer.ticket_id == ticket_id)
         .where(models.Customer.bakery_id == bakery_id)
-        .values(is_in_queue=new_status)
+        .where(models.Customer.is_in_queue == True)
+        .values(is_in_queue=False)
         .returning(models.Customer.id)
     )
 

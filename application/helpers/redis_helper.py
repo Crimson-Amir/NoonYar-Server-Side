@@ -906,6 +906,21 @@ async def should_show_on_display(r, bakery_id: int) -> bool:
     return bool(has_display_flag)
 
 
+async def consume_display_flag(r, bakery_id: int) -> bool:
+    """Atomically read and clear the display flag.
+
+    Used by new_ticket so that only the *first* ticket after idle
+    gets show_on_display = True. Subsequent tickets before baking
+    will see False.
+    """
+    display_key = REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.exists(display_key)
+    pipe.delete(display_key)
+    has_flag, _ = await pipe.execute()
+    return bool(has_flag)
+
+
 async def rebuild_display_state(r, bakery_id: int):
     """
     Rebuild display state after server restart.

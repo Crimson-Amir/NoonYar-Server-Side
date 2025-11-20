@@ -67,9 +67,10 @@ async def new_ticket(
 
     await mqtt_client.update_has_customer_in_queue(request, bakery_id)
 
-    # Check if we should show this customer on display
-    # If display flag is set, it means baker should see bread requirements
-    show_on_display = await redis_helper.should_show_on_display(r, bakery_id)
+    # Check if we should show this customer on display.
+    # This consumes the flag so only the *first* ticket after idle
+    # returns show_on_display = True.
+    show_on_display = await redis_helper.consume_display_flag(r, bakery_id)
 
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer)
@@ -436,6 +437,13 @@ async def new_bread(
         
         # Search from beginning to handle out-of-order insertions (e.g., tickets 1,3 done, then 2 added)
         next_customer = find_next_incomplete_customer(after_customer_id=None)
+
+        # If there is no next incomplete customer, this bread just finished
+        # the last active customer. System is now idle -> enable display flag
+        # so the next new_ticket can show breads on the cook display.
+        if next_customer is None and working_customer_id:
+            await redis_helper.set_display_flag(r, bakery_id)
+
         response = {
             "customer_id": next_customer,
             "customer_breads": get_customer_breads_dict(next_customer),
@@ -514,11 +522,6 @@ async def new_bread(
     # Clear display flag when baker starts baking (first bread for a customer)
     if working_customer_id and breads_made == 1:
         await redis_helper.clear_display_flag(r, bakery_id)
-    
-    # Set display flag when all breads are done (no more customers to work on)
-    if not working_customer_id and order_ids:
-        # All current customers complete - set flag so next customer shows on display
-        await redis_helper.set_display_flag(r, bakery_id)
 
     # ============================================================
     # ASYNC: Save to database
