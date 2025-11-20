@@ -544,7 +544,7 @@ async def new_bread(
     )
 
     # Add bread_index to response
-    response["bread_index"] = bread_index
+    # response["bread_index"] = bread_index
 
     return response
 
