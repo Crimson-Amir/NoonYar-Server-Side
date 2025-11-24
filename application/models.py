@@ -1,7 +1,7 @@
 import secrets
 from sqlalchemy.types import Unicode
 from application.database import Base
-from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger
+from sqlalchemy import Integer, String, Column, Boolean, ForeignKey, DateTime, BigInteger, Date
 from sqlalchemy import ForeignKeyConstraint
 from datetime import datetime
 from pytz import UTC
@@ -47,6 +47,7 @@ class Bakery(Base):
     bread_cook_time_log_associations = relationship("BreadCookTimeLog", back_populates="bakery", cascade="all, delete-orphan")
     customers = relationship("Customer", back_populates="bakery", cascade="all, delete-orphan")
     breads_associations = relationship("Bread", back_populates="bakery", cascade="all, delete-orphan")
+    queue_state_snapshots = relationship("QueueStateSnapshot", back_populates="bakery", cascade="all, delete-orphan")
 
 
 class BreadType(Base):
@@ -161,6 +162,18 @@ class Bread(Base):
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'))
     customer = relationship("Customer", back_populates="breads_associations")
     bakery = relationship("Bakery", back_populates="breads_associations")
+
+
+class QueueStateSnapshot(Base):
+    __tablename__ = 'queue_state_snapshot'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), nullable=False)
+    snapshot_date = Column(Date, nullable=False)
+    state_json = Column(Unicode, nullable=False)
+    register_date = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    bakery = relationship("Bakery", back_populates="queue_state_snapshots")
 
 
 # class OTP(Base):

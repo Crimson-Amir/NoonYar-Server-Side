@@ -430,8 +430,24 @@ async def load_queue_state(r, bakery_id: int):
 
     key = REDIS_KEY_QUEUE_STATE.format(bakery_id)
     raw = await r.get(key)
+    import json
 
     if not raw:
+        # No Redis state: try to restore from today's DB snapshot first.
+        from application.database import SessionLocal
+        from application import crud
+
+        with SessionLocal() as db:
+            snapshot = crud.get_today_queue_state_snapshot(db, bakery_id)
+
+        if snapshot and snapshot.state_json:
+            try:
+                data = json.loads(snapshot.state_json)
+                return BakeryQueueState.from_dict(data)
+            except Exception:
+                # Fallback to fresh state if snapshot is corrupted.
+                pass
+
         # Fresh state: seed next_number from today's last ticket so
         # hardware ticket IDs remain monotonic across restarts.
         state = BakeryQueueState()
@@ -439,11 +455,24 @@ async def load_queue_state(r, bakery_id: int):
         state.next_number = last_ticket + 1
         return state
 
-    import json
-
     try:
         data = json.loads(raw)
     except Exception:
+        # Redis payload is corrupted: attempt DB snapshot, else fall back
+        # to a fresh state seeded from today's last ticket.
+        from application.database import SessionLocal
+        from application import crud
+
+        with SessionLocal() as db:
+            snapshot = crud.get_today_queue_state_snapshot(db, bakery_id)
+
+        if snapshot and snapshot.state_json:
+            try:
+                data = json.loads(snapshot.state_json)
+                return BakeryQueueState.from_dict(data)
+            except Exception:
+                pass
+
         state = BakeryQueueState()
         last_ticket = await get_last_ticket_number(r, bakery_id)
         state.next_number = last_ticket + 1
@@ -460,6 +489,14 @@ async def save_queue_state(r, bakery_id: int, state) -> None:
     payload = json.dumps(state.to_dict(), ensure_ascii=False)
     ttl = seconds_until_midnight_iran()
     await r.set(key, payload, ex=ttl)
+
+    # Persist a daily snapshot to the database for crash recovery and
+    # debugging. This keeps one row per bakery per local_tehran_date.
+    from application.database import SessionLocal
+    from application import crud
+
+    with SessionLocal() as db:
+        crud.upsert_queue_state_snapshot(db, bakery_id, state.to_dict())
 
 
 async def get_effective_current_served(r, bakery_id: int) -> int:

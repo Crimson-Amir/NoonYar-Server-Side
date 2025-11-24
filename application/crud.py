@@ -6,6 +6,7 @@ import pytz
 from datetime import datetime, timezone
 from sqlalchemy import asc
 from datetime import datetime, time
+import json
 
 def get_user_by_phone_number(db: Session, phone_number: str):
     return db.query(models.User).filter(models.User.phone_number == phone_number).first()
@@ -401,6 +402,59 @@ def get_today_last_customer(db: Session, bakery_id: int):
     )
 
     return last_customer
+
+
+def upsert_queue_state_snapshot(db: Session, bakery_id: int, state_dict: dict):
+    """Insert or update today's QueueStateSnapshot for this bakery.
+
+    We keep exactly one row per (bakery_id, local_tehran_date) and overwrite
+    state_json on each call so the latest queue_state is available for
+    crash recovery and debugging.
+    """
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    today = now_tehran.date()
+
+    payload = json.dumps(state_dict, ensure_ascii=False)
+
+    snapshot = (
+        db.query(models.QueueStateSnapshot)
+        .filter(
+            models.QueueStateSnapshot.bakery_id == bakery_id,
+            models.QueueStateSnapshot.snapshot_date == today,
+        )
+        .first()
+    )
+
+    if snapshot:
+        snapshot.state_json = payload
+    else:
+        snapshot = models.QueueStateSnapshot(
+            bakery_id=bakery_id,
+            snapshot_date=today,
+            state_json=payload,
+        )
+        db.add(snapshot)
+
+    db.commit()
+    return snapshot
+
+
+def get_today_queue_state_snapshot(db: Session, bakery_id: int):
+    """Return today's latest QueueStateSnapshot for this bakery, if any."""
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    today = now_tehran.date()
+
+    return (
+        db.query(models.QueueStateSnapshot)
+        .filter(
+            models.QueueStateSnapshot.bakery_id == bakery_id,
+            models.QueueStateSnapshot.snapshot_date == today,
+        )
+        .order_by(models.QueueStateSnapshot.id.desc())
+        .first()
+    )
 
 def update_timeout_second(db: Session, bakery_id: int, second: int) -> int | None:
     if second:
