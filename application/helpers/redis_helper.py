@@ -23,6 +23,13 @@ REDIS_KEY_BREAD_TIME_DIFFS = f"{REDIS_KEY_PREFIX}:bread_time_diff"
 REDIS_KEY_PREP_STATE = f"{REDIS_KEY_PREFIX}:prep_state"
 REDIS_KEY_DISPLAY_CUSTOMER = f"{REDIS_KEY_PREFIX}:display_customer"
 REDIS_KEY_BREAD_NAMES = "bread_names"
+REDIS_KEY_SLOTS_FOR_MULTIS = f"{REDIS_KEY_PREFIX}:slots_for_multis"
+REDIS_KEY_SLOTS_FOR_SINGLES = f"{REDIS_KEY_PREFIX}:slots_for_singles"
+REDIS_KEY_NEXT_TICKET = f"{REDIS_KEY_PREFIX}:next_ticket"
+REDIS_KEY_LAST_SINGLE = f"{REDIS_KEY_PREFIX}:last_single"
+REDIS_KEY_LAST_MULTI = f"{REDIS_KEY_PREFIX}:last_multi"
+REDIS_KEY_CURRENT_SERVED = f"{REDIS_KEY_PREFIX}:current_served"
+REDIS_KEY_QUEUE_STATE = f"{REDIS_KEY_PREFIX}:queue_state"
 
 async def get_bakery_runtime_state(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -386,6 +393,222 @@ async def get_last_ticket_number(r, bakery_id, fetch_from_redis_first=True):
 
         return last
 
+
+async def is_ticket_used_today(r, bakery_id: int, ticket_id: int) -> bool:
+    """Check if a hardware ticket_id has been used today for a bakery.
+
+    This queries the database for any Customer row for today with this
+    ticket_id and bakery_id, independent of is_in_queue/wait_list status.
+    """
+    with SessionLocal() as db:
+        return crud.customer_ticket_exists_today(db, ticket_id, bakery_id)
+
+
+async def get_current_served(r, bakery_id: int) -> int:
+    key = REDIS_KEY_CURRENT_SERVED.format(bakery_id)
+    raw = await r.get(key)
+    if raw is None:
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def set_current_served(r, bakery_id: int, ticket_id: int) -> None:
+    key = REDIS_KEY_CURRENT_SERVED.format(bakery_id)
+    if ticket_id is None or int(ticket_id) <= 0:
+        await r.delete(key)
+        return
+
+    ttl = seconds_until_midnight_iran()
+    await r.set(key, int(ticket_id), ex=ttl)
+
+
+async def load_queue_state(r, bakery_id: int):
+    from application.bakery_queue_model import BakeryQueueState
+
+    key = REDIS_KEY_QUEUE_STATE.format(bakery_id)
+    raw = await r.get(key)
+
+    if not raw:
+        # Fresh state: seed next_number from today's last ticket so
+        # hardware ticket IDs remain monotonic across restarts.
+        state = BakeryQueueState()
+        last_ticket = await get_last_ticket_number(r, bakery_id)
+        state.next_number = last_ticket + 1
+        return state
+
+    import json
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        state = BakeryQueueState()
+        last_ticket = await get_last_ticket_number(r, bakery_id)
+        state.next_number = last_ticket + 1
+        return state
+
+    return BakeryQueueState.from_dict(data)
+
+
+async def save_queue_state(r, bakery_id: int, state) -> None:
+    key = REDIS_KEY_QUEUE_STATE.format(bakery_id)
+
+    import json
+
+    payload = json.dumps(state.to_dict(), ensure_ascii=False)
+    ttl = seconds_until_midnight_iran()
+    await r.set(key, payload, ex=ttl)
+
+
+async def get_effective_current_served(r, bakery_id: int) -> int:
+    """Return the effective current_served cutoff for ticket issuance.
+
+    This combines the explicit current_served key (set from new_bread)
+    with the maximum ticket_id that has any bread recorded in the
+    breads sorted set. The behavior matches the current_served logic
+    inside get_slots_state, but without loading or touching any of the
+    legacy slot/next/last keys.
+    """
+    current_key = REDIS_KEY_CURRENT_SERVED.format(bakery_id)
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.get(current_key)
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')
+    raw_current, all_breads = await pipe.execute()
+
+    current_served = int(raw_current) if raw_current is not None else 0
+
+    max_ticket_from_breads = 0
+    if all_breads:
+        for bread_value in all_breads:
+            if ':' in bread_value:
+                try:
+                    _, cid_str = bread_value.split(':', 1)
+                    cid = int(cid_str)
+                    if cid > max_ticket_from_breads:
+                        max_ticket_from_breads = cid
+                except (ValueError, TypeError):
+                    continue
+
+    if max_ticket_from_breads > current_served:
+        current_served = max_ticket_from_breads
+
+    return current_served
+
+
+async def get_slots_state(r, bakery_id: int):
+    multi_key = REDIS_KEY_SLOTS_FOR_MULTIS.format(bakery_id)
+    single_key = REDIS_KEY_SLOTS_FOR_SINGLES.format(bakery_id)
+    next_key = REDIS_KEY_NEXT_TICKET.format(bakery_id)
+    last_single_key = REDIS_KEY_LAST_SINGLE.format(bakery_id)
+    last_multi_key = REDIS_KEY_LAST_MULTI.format(bakery_id)
+    current_key = REDIS_KEY_CURRENT_SERVED.format(bakery_id)
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.smembers(multi_key)
+    pipe.smembers(single_key)
+    pipe.get(next_key)
+    pipe.get(last_single_key)
+    pipe.get(last_multi_key)
+    pipe.get(current_key)
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')
+    raw_multi, raw_single, raw_next, raw_last_single, raw_last_multi, raw_current, all_breads = await pipe.execute()
+
+    slots_for_multis = {int(x) for x in raw_multi} if raw_multi else set()
+    slots_for_singles = {int(x) for x in raw_single} if raw_single else set()
+
+    if raw_next is None:
+        last_ticket = await get_last_ticket_number(r, bakery_id)
+        next_number = last_ticket + 1
+    else:
+        next_number = int(raw_next)
+
+    last_single = int(raw_last_single) if raw_last_single is not None else 0
+    last_multi = int(raw_last_multi) if raw_last_multi is not None else 0
+    current_served = int(raw_current) if raw_current is not None else 0
+
+    max_ticket_from_breads = 0
+    if all_breads:
+        for bread_value in all_breads:
+            if ':' in bread_value:
+                try:
+                    _, cid_str = bread_value.split(':', 1)
+                    cid = int(cid_str)
+                    if cid > max_ticket_from_breads:
+                        max_ticket_from_breads = cid
+                except (ValueError, TypeError):
+                    continue
+
+    if max_ticket_from_breads > current_served:
+        current_served = max_ticket_from_breads
+
+    if current_served > 0:
+        slots_for_multis = {n for n in slots_for_multis if n > current_served}
+        slots_for_singles = {n for n in slots_for_singles if n > current_served}
+        if next_number <= current_served:
+            next_number = current_served + 1
+
+    # Ensure next_number is strictly greater than any existing structural
+    # number (last_single, last_multi, current_served, and all slot values).
+    # This mirrors the monotonic next_number behavior of the in-memory
+    # BakeryQueue, and prevents new tickets (especially large multis) from
+    # being assigned into the middle of existing singles when there is not
+    # enough slots_for_multis capacity.
+    max_slot = 0
+    if slots_for_multis:
+        max_slot = max(max_slot, max(slots_for_multis))
+    if slots_for_singles:
+        max_slot = max(max_slot, max(slots_for_singles))
+
+    max_structural = max(last_single, last_multi, current_served, max_slot)
+    if next_number <= max_structural:
+        next_number = max_structural + 1
+
+    return slots_for_multis, slots_for_singles, next_number, last_single, last_multi, current_served
+
+
+async def save_slots_state(
+    r,
+    bakery_id: int,
+    slots_for_multis,
+    slots_for_singles,
+    next_number: int,
+    last_single: int,
+    last_multi: int,
+):
+    multi_key = REDIS_KEY_SLOTS_FOR_MULTIS.format(bakery_id)
+    single_key = REDIS_KEY_SLOTS_FOR_SINGLES.format(bakery_id)
+    next_key = REDIS_KEY_NEXT_TICKET.format(bakery_id)
+    last_single_key = REDIS_KEY_LAST_SINGLE.format(bakery_id)
+    last_multi_key = REDIS_KEY_LAST_MULTI.format(bakery_id)
+
+    ttl = seconds_until_midnight_iran()
+    pipe = r.pipeline()
+
+    pipe.delete(multi_key)
+    pipe.delete(single_key)
+
+    if slots_for_multis:
+        pipe.sadd(multi_key, *[str(x) for x in slots_for_multis])
+        pipe.expire(multi_key, ttl)
+
+    if slots_for_singles:
+        pipe.sadd(single_key, *[str(x) for x in slots_for_singles])
+        pipe.expire(single_key, ttl)
+
+    pipe.set(next_key, int(next_number))
+    pipe.expire(next_key, ttl)
+    pipe.set(last_single_key, int(last_single))
+    pipe.expire(last_single_key, ttl)
+    pipe.set(last_multi_key, int(last_multi))
+    pipe.expire(last_multi_key, ttl)
+
+    await pipe.execute()
+
 async def is_ticket_in_wait_list(r, bakery_id, customer_id):
     skipped_list = REDIS_KEY_WAIT_LIST.format(bakery_id)
     is_exists = await r.hget(skipped_list, customer_id)
@@ -609,6 +832,13 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id),
         REDIS_KEY_LAST_BREAD_TIME.format(bakery_id),
         REDIS_KEY_BREAD_TIME_DIFFS.format(bakery_id),
+        REDIS_KEY_SLOTS_FOR_MULTIS.format(bakery_id),
+        REDIS_KEY_SLOTS_FOR_SINGLES.format(bakery_id),
+        REDIS_KEY_NEXT_TICKET.format(bakery_id),
+        REDIS_KEY_LAST_SINGLE.format(bakery_id),
+        REDIS_KEY_LAST_MULTI.format(bakery_id),
+        REDIS_KEY_CURRENT_SERVED.format(bakery_id),
+        REDIS_KEY_QUEUE_STATE.format(bakery_id),
     ]
 
     pipe = r.pipeline(transaction=True)
@@ -916,6 +1146,30 @@ async def consume_display_flag(r, bakery_id: int) -> bool:
     display_key = REDIS_KEY_DISPLAY_CUSTOMER.format(bakery_id)
     pipe = r.pipeline()
     pipe.exists(display_key)
+    pipe.delete(display_key)
+    has_flag, _ = await pipe.execute()
+    return bool(has_flag)
+
+
+async def rebuild_display_state(r, bakery_id: int):
+    """
+    Rebuild display state after server restart.
+    
+    Logic:
+    - If breads are being prepared: clear flag (baker is working)
+    - If no breads being prepared: set flag (show display)
+    """
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    bread_count = await r.zcard(breads_key)
+    
+    if bread_count == 0:
+        # No breads being prepared - set flag to show display
+        await set_display_flag(r, bakery_id)
+        print(f"Set display flag for bakery {bakery_id} (no breads in preparation)")
+    else:
+        # Breads are being prepared - clear flag
+        await clear_display_flag(r, bakery_id)
+        print(f"Cleared display flag for bakery {bakery_id} ({bread_count} breads in preparation)")
     pipe.delete(display_key)
     has_flag, _ = await pipe.execute()
     return bool(has_flag)

@@ -1,5 +1,7 @@
 from typing import List, Dict
 from application.helpers import redis_helper
+from application.bakery_queue_model import BakeryQueueState
+
 
 class Algorithm:
 
@@ -10,42 +12,27 @@ class Algorithm:
         bread_counts: list of bread counts (any length)
         """
         total = sum(bread_counts)
-        keys = sorted(reservation_dict.keys())
 
-        if not keys:
-            return await redis_helper.get_last_ticket_number(r, bakery_id, fetch_from_redis_first=False) + 1
-        last_key = keys[-1]
-        last_sum = sum(reservation_dict[last_key])
+        # Load full BakeryQueueState from Redis
+        queue_state: BakeryQueueState = await redis_helper.load_queue_state(r, bakery_id)
 
+        # Enforce bread-based current_served: use the higher of
+        # - current_served already in queue_state (from previous calls)
+        # - current_served derived from breads/prep_state in Redis
+        _, _, _, _, _, redis_current_served = await redis_helper.get_slots_state(r, bakery_id)
+        if redis_current_served > queue_state.current_served:
+            queue_state.current_served = redis_current_served
+
+        # Issue ticket using exact BakeryQueue logic
         if total == 1:
-            for i in range(len(keys) - 1):
-                if sum(reservation_dict[keys[i]]) > 1 and sum(reservation_dict[keys[i + 1]]) > 1:
-                    new_key = keys[i] + 1
-                    while new_key in reservation_dict:
-                        new_key += 1
-                    return new_key
-
-            new_key = 1 if not keys else keys[-1] + (2 if last_sum == 1 else 1)
-
+            ticket = queue_state.issue_single()
         else:
-            last_multiple = 0
-            for key in reversed(keys):
-                if sum(reservation_dict[key]) > 1:
-                    last_multiple = key
-                    break
-            distance = (keys[-1] - last_multiple) // 2
+            ticket = queue_state.issue_multi(quantity=total)
 
-            if last_multiple == last_key:
-                new_key = last_key + 2
-            elif distance < total and last_sum == 1:
-                new_key = last_key + 1
-            else:
-                new_key = last_multiple + (total * 2)
+        # Persist updated state back to Redis
+        await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
-        while new_key in reservation_dict:
-            new_key += 1
-
-        return new_key
+        return ticket.number
 
     @staticmethod
     def compute_bread_time(time_per_bread_list, reserve):

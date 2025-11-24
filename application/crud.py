@@ -385,13 +385,18 @@ def get_today_last_customer(db: Session, bakery_id: int):
     midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
     midnight_utc = midnight_tehran.astimezone(pytz.utc)
 
+    # We want the customer with the *highest ticket_id* for today,
+    # not simply the last inserted row. This ensures that
+    # get_last_ticket_number() always returns the maximum ticket
+    # used today, even if the scheduling algorithm reuses lower
+    # numbers for queue positions.
     last_customer = (
         db.query(models.Customer)
         .filter(
             models.Customer.bakery_id == bakery_id,
             models.Customer.register_date >= midnight_utc,
         )
-        .order_by(models.Customer.id.desc())  # max ID first
+        .order_by(models.Customer.ticket_id.desc())  # max ticket_id first
         .first()
     )
 
@@ -448,6 +453,21 @@ def get_customer_by_ticket_id(db, ticket_id: int, bakery_id: int):
         models.Customer.is_in_queue == True,
         models.Customer.register_date >= midnight_utc
     ).first()
+
+
+def customer_ticket_exists_today(db: Session, ticket_id: int, bakery_id: int) -> bool:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    exists = db.query(models.Customer).filter(
+        models.Customer.ticket_id == ticket_id,
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.register_date >= midnight_utc
+    ).first()
+
+    return exists is not None
 
 
 def create_bread(db, bakery_id:int, customer_internal_id: int, baked_at: datetime, consumed: bool = False):

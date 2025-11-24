@@ -189,32 +189,27 @@ async def current_ticket(
     }
 
 
-@router.put('/send_ticket_to_wait_list')
+@router.put('/send_current_ticket_to_wait_list/{bakery_id}')
 @handle_errors
 async def send_ticket_to_wait_list(
         request: Request,
-        ticket: schemas.TickeOperationtRequirement,
+        bakery_id,
         token: str = Depends(validate_token)
 ):
-    bakery_id = ticket.bakery_id
-
 
     if not token_helpers.verify_bakery_token(token, bakery_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    customer_id = ticket.customer_ticket_id
     r = request.app.state.redis
 
     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
 
     current_ticket_id_raw = await r.zrange(order_key, 0, 0)
-    current_ticket_id = int(current_ticket_id_raw[0])
 
-    if not current_ticket_id:
+    if not current_ticket_id_raw:
         raise HTTPException(status_code=404, detail={'status': 'The queue is empty'})
-
-    await redis_helper.check_for_correct_current_id(customer_id, current_ticket_id)
+    customer_id = int(current_ticket_id_raw[0])
 
     pipe = r.pipeline()
     pipe.hget(res_key, str(customer_id))
@@ -228,6 +223,10 @@ async def send_ticket_to_wait_list(
             raise HTTPException(status_code=404, detail={'status': 'The queue is empty'})
         status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(r, bakery_id, customer_id)
         if not status: raise HTTPException(status_code=401, detail="invalid customer_id")
+
+    queue_state = await redis_helper.load_queue_state(r, bakery_id)
+    queue_state.mark_ticket_served(customer_id)
+    await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
     await redis_helper.add_customer_to_wait_list(r, bakery_id, customer_id, reservations_str=current_customer_reservation)
     
@@ -428,6 +427,8 @@ async def new_bread(
     customer_needs = get_customer_needs(working_customer_id)
     is_customer_done = breads_made >= customer_needs if working_customer_id else False
 
+    current_served_candidate = None
+
     if is_customer_done:
         # Customer is complete after this bread - find next incomplete customer
         # We need to update breads_per_customer temporarily to reflect the bread we just made
@@ -445,6 +446,7 @@ async def new_bread(
                 "customer_breads": get_customer_breads_dict(next_customer),
                 "next_customer": True,
             }
+            current_served_candidate = next_customer
         else:
             # No more incomplete customers: this bread was the last bread
             # of the last customer. System is now idle -> set display flag
@@ -467,6 +469,16 @@ async def new_bread(
             "has_customer": False,
             "belongs_to_customer": False,
         }
+
+    # Update current_served boundary when we've just finished a customer
+    # and are showing the next customer's breads to the baker. In this
+    # situation, new tickets must not be assigned below that next
+    # customer's ticket_id, even though their first bread has not been
+    # baked yet.
+    if current_served_candidate:
+        existing_cs = await redis_helper.get_current_served(r, bakery_id)
+        if current_served_candidate > existing_cs:
+            await redis_helper.set_current_served(r, bakery_id, current_served_candidate)
 
     # ============================================================
     # TIMING: Calculate bread metadata
