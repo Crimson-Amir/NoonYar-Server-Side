@@ -189,6 +189,55 @@ async def current_ticket(
     }
 
 
+@router.get('/ticket_queue_stats/{bakery_id}/{ticket_id}')
+@handle_errors
+async def ticket_queue_stats(
+        request: Request,
+        bakery_id: int,
+        ticket_id: int,
+        token: str = Depends(validate_token)
+):
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    time_per_bread_raw, reservations_map = await pipe.execute()
+
+    if not time_per_bread_raw:
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
+
+    if not reservations_map:
+        raise HTTPException(status_code=404, detail={"error": "queue is empty"})
+
+    reservation_dict = {
+        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
+    }
+
+    reservation_keys = sorted(reservation_dict.keys())
+
+    if ticket_id not in reservation_keys:
+        raise HTTPException(status_code=404, detail="Ticket does not Exist")
+
+    included_tickets = [k for k in reservation_keys if k <= ticket_id]
+
+    people_in_queue_until_this_ticket = len(included_tickets)
+    tickets_and_their_bread_count = {
+        str(k): sum(reservation_dict[k]) for k in included_tickets
+    }
+
+    return {
+        "people_in_queue_until_this_ticket": people_in_queue_until_this_ticket,
+        "tickets_and_their_bread_count": tickets_and_their_bread_count,
+    }
+
+
 @router.put('/send_current_ticket_to_wait_list/{bakery_id}')
 @handle_errors
 async def send_ticket_to_wait_list(
