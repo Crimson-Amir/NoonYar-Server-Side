@@ -130,6 +130,8 @@ async def serve_ticket(
         "user_detail": user_detail,
     })
 
+    await redis_helper.add_served_ticket(r, bakery_id, customer_id)
+
     return {
         "user_detail": user_detail,
     }
@@ -186,55 +188,6 @@ async def current_ticket(
         "has_customer_in_queue": True,
         "current_ticket_id": current_ticket_id,
         "current_user_detail": user_breads
-    }
-
-
-@router.get('/ticket_queue_stats/{bakery_id}/{ticket_id}')
-@handle_errors
-async def ticket_queue_stats(
-        request: Request,
-        bakery_id: int,
-        ticket_id: int,
-        token: str = Depends(validate_token)
-):
-    if not token_helpers.verify_bakery_token(token, bakery_id):
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    r = request.app.state.redis
-
-    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
-    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-
-    pipe = r.pipeline()
-    pipe.hgetall(time_key)
-    pipe.hgetall(res_key)
-    time_per_bread_raw, reservations_map = await pipe.execute()
-
-    if not time_per_bread_raw:
-        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
-
-    if not reservations_map:
-        raise HTTPException(status_code=404, detail={"error": "queue is empty"})
-
-    reservation_dict = {
-        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
-    }
-
-    reservation_keys = sorted(reservation_dict.keys())
-
-    if ticket_id not in reservation_keys:
-        raise HTTPException(status_code=404, detail="Ticket does not Exist")
-
-    included_tickets = [k for k in reservation_keys if k <= ticket_id]
-
-    people_in_queue_until_this_ticket = len(included_tickets)
-    tickets_and_their_bread_count = {
-        str(k): sum(reservation_dict[k]) for k in included_tickets
-    }
-
-    return {
-        "people_in_queue_until_this_ticket": people_in_queue_until_this_ticket,
-        "tickets_and_their_bread_count": tickets_and_their_bread_count,
     }
 
 
@@ -332,6 +285,157 @@ async def is_ticket_in_wait_list(
     return {
         "is_ticket_in_wait_list": status
     }
+
+@router.get('/current_cook_customer/{bakery_id}')
+@handle_errors
+async def current_cook_customer(
+        bakery_id,
+        request: Request,
+        token: str = Depends(validate_token)
+):
+    """Read-only view: what customer_breads would the cook see if we called new_bread now?"""
+    bakery_id = int(bakery_id)
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    # ============================================================
+    # FETCH: Get all data in one pipeline (read-only)
+    # ============================================================
+    prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
+    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.get(prep_state_key)
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    pipe.zrange(order_key, 0, -1)
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')  # Get all breads to count per customer
+
+    prep_state_str, time_per_bread, reservations_map, order_ids, all_breads = await pipe.execute()
+
+    # ============================================================
+    # PARSE: Convert Redis data to usable format
+    # ============================================================
+    order_ids = [int(x) for x in order_ids] if order_ids else []
+    time_per_bread = {k: int(v) for k, v in time_per_bread.items()} if time_per_bread else {}
+    bread_ids_sorted = sorted(time_per_bread.keys())
+
+    # Count breads already made per customer
+    breads_per_customer = {}
+    for bread_value in all_breads:
+        if ':' in bread_value:
+            try:
+                cid = int(bread_value.split(':')[1])
+            except ValueError:
+                continue
+            breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
+
+    # ============================================================
+    # LOGIC: Determine which customer we're working on (same as new_bread)
+    # ============================================================
+    def get_customer_needs(customer_id):
+        """Get total breads needed for a customer."""
+        if not customer_id or str(customer_id) not in reservations_map:
+            return 0
+        counts = list(map(int, reservations_map[str(customer_id)].split(',')))
+        return sum(counts)
+
+    def get_customer_breads_dict(customer_id):
+        """Get bread type -> count mapping for a customer."""
+        if not customer_id or str(customer_id) not in reservations_map:
+            return {}
+        counts = list(map(int, reservations_map[str(customer_id)].split(',')))
+        return {bid: count for bid, count in zip(bread_ids_sorted, counts)}
+
+    working_customer_id = None
+    breads_made = 0
+    last_completed_customer = None
+
+    if prep_state_str and order_ids:
+        # Check if we're currently working on a customer
+        state_customer_id, state_bread_count = map(int, prep_state_str.split(':'))
+
+        # Verify this customer still exists in the queue and is incomplete
+        if state_customer_id in order_ids:
+            needed = get_customer_needs(state_customer_id)
+            already_made = breads_per_customer.get(state_customer_id, 0)
+
+            if already_made < needed:
+                # Continue with this customer (don't jump to earlier insertions)
+                working_customer_id = state_customer_id
+                breads_made = already_made
+            else:
+                # This customer is now complete
+                last_completed_customer = state_customer_id
+
+    # If no valid customer from prep_state, scan from beginning
+    if working_customer_id is None and order_ids:
+        for customer_id in order_ids:
+            needed = get_customer_needs(customer_id)
+            already_made = breads_per_customer.get(customer_id, 0)
+
+            if already_made < needed:
+                # Found first incomplete customer
+                working_customer_id = customer_id
+                breads_made = already_made
+                break
+            else:
+                # This customer is complete
+                last_completed_customer = customer_id
+
+    # ============================================================
+    # SIMULATION: If we baked one more bread now, what would cook see?
+    # ============================================================
+    bread_belongs_to = working_customer_id or 0
+    breads_made += 1 if working_customer_id else 0
+
+    customer_needs = get_customer_needs(working_customer_id)
+    is_customer_done = breads_made >= customer_needs if working_customer_id else False
+
+    if is_customer_done:
+        # Customer would be complete after this bread - find next incomplete customer
+        if working_customer_id:
+            breads_per_customer[working_customer_id] = breads_made
+
+        # Search from beginning to handle out-of-order insertions
+        next_customer = None
+        for customer_id in order_ids:
+            needed = get_customer_needs(customer_id)
+            already_made = breads_per_customer.get(customer_id, 0)
+            if already_made < needed:
+                next_customer = customer_id
+                break
+
+        if next_customer:
+            response = {
+                "customer_id": next_customer,
+                "customer_breads": get_customer_breads_dict(next_customer),
+                "next_customer": True,
+            }
+        else:
+            response = {
+                "has_customer": False,
+                "belongs_to_customer": True,
+            }
+    elif working_customer_id:
+        response = {
+            "customer_id": working_customer_id,
+            "customer_breads": get_customer_breads_dict(working_customer_id),
+            "next_customer": False
+        }
+    else:
+        response = {
+            "has_customer": False,
+            "belongs_to_customer": False,
+        }
+
+    return response
+
 
 @router.post('/new_bread/{bakery_id}')
 @handle_errors

@@ -30,6 +30,7 @@ REDIS_KEY_LAST_SINGLE = f"{REDIS_KEY_PREFIX}:last_single"
 REDIS_KEY_LAST_MULTI = f"{REDIS_KEY_PREFIX}:last_multi"
 REDIS_KEY_CURRENT_SERVED = f"{REDIS_KEY_PREFIX}:current_served"
 REDIS_KEY_QUEUE_STATE = f"{REDIS_KEY_PREFIX}:queue_state"
+REDIS_KEY_SERVED_TICKETS = f"{REDIS_KEY_PREFIX}:served_tickets"
 
 async def get_bakery_runtime_state(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -650,6 +651,21 @@ async def is_ticket_in_wait_list(r, bakery_id, customer_id):
     skipped_list = REDIS_KEY_WAIT_LIST.format(bakery_id)
     is_exists = await r.hget(skipped_list, customer_id)
     return is_exists is not None
+
+
+async def add_served_ticket(r, bakery_id: int, ticket_id: int):
+    key = REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+    pipe = r.pipeline()
+    pipe.sadd(key, int(ticket_id))
+    ttl = seconds_until_midnight_iran()
+    pipe.expire(key, ttl)
+    await pipe.execute()
+
+
+async def is_ticket_served(r, bakery_id: int, ticket_id: int) -> bool:
+    key = REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+    res = await r.sismember(key, int(ticket_id))
+    return bool(res)
 
 
 async def get_bakery_upcoming_breads(r, bakery_id: int, fetch_from_redis_first: bool = True) -> list[str]:

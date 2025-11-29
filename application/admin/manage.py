@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from application import crud, schemas
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from application.helpers import endpoint_helper
 from application.logger_config import logger
 
@@ -33,7 +34,13 @@ def require_admin(
 @router.post('/new', response_model=schemas.NewAdminResult)
 @handle_errors
 async def new_admin(admin: schemas.NewAdminRequirement, db: Session = Depends(endpoint_helper.get_db), is_admin= Depends(require_admin)):
-    new = crud.register_new_admin(db, admin.user_id, admin.status)
+    try:
+        new = crud.register_new_admin(db, admin.user_id, admin.status)
+    except IntegrityError:
+        # Likely foreign key violation: user_id does not exist in user_detail
+        db.rollback()
+        raise HTTPException(status_code=404, detail="User ID does not exist")
+
     logger.info(f"{FILE_NAME}:new_admin", extra={"user_id": admin.user_id, "status": admin.status, "add_by_admin_id": is_admin.admin_id})
     return new
 
