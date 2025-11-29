@@ -37,16 +37,17 @@ async def queue_check(request: Request, b: int, t: int):
     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(b)
     wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(b)
     served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(b)
+    user_current_ticket_key = redis_helper.REDIS_KEY_USER_CURRENT_TICKET.format(b)
 
     # Fetch all data in one pipeline
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
     pipe.hgetall(name_key)
-    pipe.zrange(order_key, 0, 0)
     pipe.hget(wait_list_key, t)
     pipe.sismember(served_key, t)
-    time_per_bread_raw, reservations_map, bread_names_raw, current_ticket_id_raw, wait_list_hit, is_served_flag = await pipe.execute()
+    pipe.get(user_current_ticket_key)
+    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_hit, is_served_flag, user_current_ticket_raw = await pipe.execute()
 
     # Convert Redis byte/string values
     bread_time = {int(k): int(v) for k, v in time_per_bread_raw.items()}
@@ -65,8 +66,13 @@ async def queue_check(request: Request, b: int, t: int):
     reservation_keys = sorted(reservation_dict.keys())
     algorithm_instance = Algorithm()
 
-    # Determine current ticket (first ticket being processed) directly from ZSET
-    current_ticket_id = int(current_ticket_id_raw[0]) if current_ticket_id_raw else None
+    # Determine current_ticket_id for the response from dedicated key set by hardware current_ticket.
+    current_ticket_id = None
+    if user_current_ticket_raw is not None:
+        try:
+            current_ticket_id = int(user_current_ticket_raw)
+        except (TypeError, ValueError):
+            current_ticket_id = None
 
     # Determine if target user exists in active queue
     is_user_exist = t in reservation_keys

@@ -182,6 +182,10 @@ async def current_ticket(
         r, bakery_id, user_breads, time_per_bread, reservation_keys, current_ticket_id, reservation_dict
     )
 
+    # Update user-facing current ticket only when this ticket is ready to be served.
+    if ready:
+        await redis_helper.set_user_current_ticket(r, bakery_id, current_ticket_id)
+
     return {
         "ready": ready,
         "wait_until": wait_until,

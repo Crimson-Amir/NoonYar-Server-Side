@@ -31,6 +31,7 @@ REDIS_KEY_LAST_MULTI = f"{REDIS_KEY_PREFIX}:last_multi"
 REDIS_KEY_CURRENT_SERVED = f"{REDIS_KEY_PREFIX}:current_served"
 REDIS_KEY_QUEUE_STATE = f"{REDIS_KEY_PREFIX}:queue_state"
 REDIS_KEY_SERVED_TICKETS = f"{REDIS_KEY_PREFIX}:served_tickets"
+REDIS_KEY_USER_CURRENT_TICKET = f"{REDIS_KEY_PREFIX}:user_current_ticket"
 
 async def get_bakery_runtime_state(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -424,6 +425,32 @@ async def set_current_served(r, bakery_id: int, ticket_id: int) -> None:
 
     ttl = seconds_until_midnight_iran()
     await r.set(key, int(ticket_id), ex=ttl)
+
+
+async def set_user_current_ticket(r, bakery_id: int, ticket_id: int | None) -> None:
+    """Set the current ticket ID for user-facing endpoints (/res).
+
+    If ticket_id is None or <= 0, the key is cleared.
+    Otherwise it is stored with TTL until midnight.
+    """
+    key = REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id)
+    if ticket_id is None or int(ticket_id) <= 0:
+        await r.delete(key)
+        return
+
+    ttl = seconds_until_midnight_iran()
+    await r.set(key, int(ticket_id), ex=ttl)
+
+
+async def get_user_current_ticket(r, bakery_id: int) -> int | None:
+    key = REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id)
+    raw = await r.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 async def load_queue_state(r, bakery_id: int):
@@ -892,6 +919,8 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_LAST_MULTI.format(bakery_id),
         REDIS_KEY_CURRENT_SERVED.format(bakery_id),
         REDIS_KEY_QUEUE_STATE.format(bakery_id),
+        REDIS_KEY_SERVED_TICKETS.format(bakery_id),
+        REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id),
     ]
 
     pipe = r.pipeline(transaction=True)
