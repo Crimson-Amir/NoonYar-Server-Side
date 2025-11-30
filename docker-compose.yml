@@ -2,6 +2,8 @@ services:
   web:
     image: voidtrek/noonyar:latest
     env_file: .env
+    volumes:
+      - ./logs:/var/log/noonyar
     depends_on:
       db:
         condition: service_healthy
@@ -17,6 +19,8 @@ services:
     image: voidtrek/noonyar:latest
     command: celery -A application.tasks worker --loglevel=info --pool=threads --concurrency=4
     env_file: .env
+    volumes:
+      - ./logs:/var/log/noonyar
     depends_on:
       db:
         condition: service_healthy

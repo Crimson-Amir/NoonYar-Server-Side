@@ -33,6 +33,3 @@ docker-compose.override.yml
 **/node_modules/   # if frontend exists
 *.pid
 *.sock
-
-alembic/versions/*.pyc
-alembic/versions/*.py
