@@ -3,6 +3,8 @@ from fastapi.responses import RedirectResponse
 from application.helpers import endpoint_helper, redis_helper, token_helpers
 from application.algorithm import Algorithm
 from application.auth import decode_token
+from application.database import SessionLocal
+from application import crud
 
 router = APIRouter(
     prefix='',
@@ -22,24 +24,33 @@ async def home(request: Request):
     return {'status': 'OK', 'data': data}
 
 
-@router.get("/res/")
+@router.get("/res/{bakery_id}/{token_value}")
 @handle_errors
-async def queue_check(request: Request, b: int, t: int):
-    """Check the queue status for a bakery and a target reservation number."""
-    # access_token = request.cookies.get('access_token')
-    # data = decode_token(access_token)
+async def queue_check(
+    request: Request,
+    bakery_id: int,
+    token_value: str,
+):
+    """Public queue status endpoint that resolves the customer by daily token."""
     r = request.app.state.redis
 
-    # Redis keys
-    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(b)
-    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(b)
-    name_key = redis_helper.REDIS_KEY_BREAD_NAMES
-    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(b)
-    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(b)
-    served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(b)
-    user_current_ticket_key = redis_helper.REDIS_KEY_USER_CURRENT_TICKET.format(b)
+    with SessionLocal() as db:
+        customer = crud.get_customer_by_token_today(db, bakery_id, token_value)
 
-    # Fetch all data in one pipeline
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found for token")
+
+    t = customer.ticket_id
+
+    # Redis keys
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    name_key = redis_helper.REDIS_KEY_BREAD_NAMES
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+    served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+    user_current_ticket_key = redis_helper.REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id)
+
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
@@ -49,24 +60,20 @@ async def queue_check(request: Request, b: int, t: int):
     pipe.get(user_current_ticket_key)
     time_per_bread_raw, reservations_map, bread_names_raw, wait_list_hit, is_served_flag, user_current_ticket_raw = await pipe.execute()
 
-    # Convert Redis byte/string values
     bread_time = {int(k): int(v) for k, v in time_per_bread_raw.items()}
     reservation_dict = {
         int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
     }
     bread_names = {int(k): v for k, v in bread_names_raw.items()}
 
-    # Quick validation
     if not bread_time:
         return {'msg': 'bakery does not exist or does not have any bread'}
     if not reservation_dict:
         return {'msg': 'queue is empty'}
 
-    # Sort reservations (each key is a reservation number)
     reservation_keys = sorted(reservation_dict.keys())
     algorithm_instance = Algorithm()
 
-    # Determine current_ticket_id for the response from dedicated key set by hardware current_ticket.
     current_ticket_id = None
     if user_current_ticket_raw is not None:
         try:
@@ -74,7 +81,6 @@ async def queue_check(request: Request, b: int, t: int):
         except (TypeError, ValueError):
             current_ticket_id = None
 
-    # Determine if target user exists in active queue
     is_user_exist = t in reservation_keys
 
     if not is_user_exist:
@@ -90,34 +96,28 @@ async def queue_check(request: Request, b: int, t: int):
 
     reservation_number = t if is_user_exist else reservation_keys[-1]
 
-    # Count people before the user in queue
     people_in_queue = sum(1 for key in reservation_keys if key < reservation_number)
 
-    # Compute average bread time
     average_bread_time = sum(bread_time.values()) // len(bread_time)
 
-    # Prepare ordered list of time per bread (for algorithm)
     bread_ids_sorted = sorted(bread_time.keys())
     time_per_bread_list = [bread_time[k] for k in bread_ids_sorted]
 
-    # Calculate total time for customers before the target one
     in_queue_customers_time = await algorithm_instance.calculate_in_queue_customers_time(
         reservation_keys,
         reservation_number,
         reservation_dict,
         time_per_bread_list,
         r=r,
-        bakery_id=b
+        bakery_id=bakery_id
     )
 
-    # Compute empty slot time (corrected: use reservation keys, not bread keys)
     empty_slot_time = algorithm_instance.compute_empty_slot_time(
         reservation_keys,
         reservation_number,
         reservation_dict
     ) * average_bread_time
 
-    # Get user breads if exists
     user_breads_persian = user_breads = None
     if is_user_exist:
 
@@ -130,12 +130,10 @@ async def queue_check(request: Request, b: int, t: int):
             for bid, count in zip(bread_ids_sorted, reservation_dict[reservation_number])
         }
 
-
     ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
-        r, b, user_breads, bread_time, reservation_keys, reservation_number, reservation_dict
+        r, bakery_id, user_breads, bread_time, reservation_keys, reservation_number, reservation_dict
     )
 
-    # Return final response
     return {
         "ready": ready,
         "accurate_time": accurate_time,
@@ -145,23 +143,33 @@ async def queue_check(request: Request, b: int, t: int):
         "in_queue_customers_time": in_queue_customers_time,
         "user_breads": user_breads_persian,
         "current_ticket_id": current_ticket_id,
-        # "data": data
+        "ticket_id": t
     }
 
 
-@router.get("/queue_until_ticket_summary/")
+@router.get("/queue_until_ticket_summary/{bakery_id}/{token_value}")
 @handle_errors
-async def queue_until_ticket_summary(request: Request, b: int, t: int):
-    """Public endpoint: summary of queue up to and including ticket t for bakery b."""
+async def queue_until_ticket_summary(
+    request: Request,
+    bakery_id: int,
+    token_value: str,
+):
+    """Public endpoint: summary of queue up to and including ticket for a token."""
     r = request.app.state.redis
 
-    # Redis keys
-    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(b)
-    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(b)
-    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(b)
-    served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(b)
+    with SessionLocal() as db:
+        customer = crud.get_customer_by_token_today(db, bakery_id, token_value)
 
-    # Fetch needed data
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found for token")
+
+    t = customer.ticket_id
+
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+    served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)

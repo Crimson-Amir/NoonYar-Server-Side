@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Header, Request, Depends
-from application.helpers.general_helpers import seconds_until_midnight_iran
+from application.helpers.general_helpers import seconds_until_midnight_iran, generate_daily_customer_token
 from application.helpers import endpoint_helper, redis_helper, token_helpers
 from application import tasks, algorithm, mqtt_client, crud, schemas
 from application.logger_config import logger
@@ -51,6 +51,8 @@ async def new_ticket(
 
     customer_ticket_id = await algorithm.Algorithm.new_reservation(reservation_dict, bread_requirements.values(), r, bakery_id)
 
+    customer_token = generate_daily_customer_token(bakery_id, customer_ticket_id)
+
     success = await redis_helper.add_customer_to_reservation_dict(
         r, customer.bakery_id, customer_ticket_id, bread_requirements, time_per_bread=breads_type
     )
@@ -58,12 +60,14 @@ async def new_ticket(
     if not success:
         raise HTTPException(status_code=400, detail=f"Ticket {customer_ticket_id} already exists")
 
-    customer_in_upcoming_customer = await redis_helper.maybe_add_customer_to_upcoming_zset(
-        r, customer.bakery_id, customer_ticket_id, bread_requirements, upcoming_members=upcoming_set
-    )
+    # customer_in_upcoming_customer = await redis_helper.maybe_add_customer_to_upcoming_zset(
+    #     r, customer.bakery_id, customer_ticket_id, bread_requirements, upcoming_members=upcoming_set
+    # )
+    #
+    # if customer_in_upcoming_customer:
+    #     await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id)
 
-    if customer_in_upcoming_customer:
-        await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id)
+    customer_in_upcoming_customer = False
 
     await mqtt_client.update_has_customer_in_queue(request, bakery_id)
 
@@ -72,13 +76,13 @@ async def new_ticket(
     # returns show_on_display = True.
     show_on_display = await redis_helper.consume_display_flag(r, bakery_id)
 
-    logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display})
-    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer)
+    logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display, "token": customer_token})
+    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token)
 
     return {
         'customer_ticket_id': customer_ticket_id,
-        'customer_in_upcoming_customer': customer_in_upcoming_customer,
-        'show_on_display': show_on_display
+        'show_on_display': show_on_display,
+        'token': customer_token,
     }
 
 
@@ -127,6 +131,70 @@ async def serve_ticket(
     logger.info(f"{FILE_NAME}:serve_ticket", extra={
         "bakery_id": bakery_id,
         "customer_id": customer_id,
+        "user_detail": user_detail,
+    })
+
+    await redis_helper.add_served_ticket(r, bakery_id, customer_id)
+
+    return {
+        "user_detail": user_detail,
+    }
+
+
+@router.put('/serve_ticket_by_token')
+@handle_errors
+async def serve_ticket_by_token(
+        request: Request,
+        ticket: schemas.TicketByTokenRequirement,
+        token: str = Depends(validate_token)
+):
+    bakery_id = ticket.bakery_id
+    token_value = ticket.token
+
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    r = request.app.state.redis
+
+    with SessionLocal() as db:
+        customer = crud.get_customer_by_token_today(db, bakery_id, token_value)
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found for token")
+
+    customer_id = customer.ticket_id
+
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+    pipe1 = r.pipeline()
+    pipe1.hgetall(time_key)
+    pipe1.hget(wait_list_key, str(customer_id))
+    pipe1.hdel(wait_list_key, str(customer_id))
+
+    time_per_bread, wait_list_reservations, remove_customer_from_wait_list = await pipe1.execute()
+
+    if not remove_customer_from_wait_list or not wait_list_reservations:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "Ticket is not in Wait list",
+            }
+        )
+
+    tasks.serve_wait_list_ticket.delay(customer_id, bakery_id)
+    customer_reservations = list(map(int, wait_list_reservations.split(",")))
+
+    bread_ids = list(time_per_bread.keys())
+
+    if len(customer_reservations) != len(bread_ids):
+        raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
+
+    user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
+
+    logger.info(f"{FILE_NAME}:serve_ticket_by_token", extra={
+        "bakery_id": bakery_id,
+        "customer_id": customer_id,
+        "token": token_value,
         "user_detail": user_detail,
     })
 

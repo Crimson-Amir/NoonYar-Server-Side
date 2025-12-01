@@ -33,6 +33,10 @@ class NewCustomerRequirement(BakeryID):
 class TickeOperationtRequirement(BakeryID):
     customer_ticket_id: int
 
+
+class TicketByTokenRequirement(BakeryID):
+    token: str
+
 class Initialize(BakeryID):
     bread_type_id_and_preparation_time: Dict[str, int]
 

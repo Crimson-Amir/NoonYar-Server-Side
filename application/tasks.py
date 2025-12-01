@@ -74,9 +74,9 @@ def handle_task_errors(func):
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirements, customer_in_upcoming_customer=False):
+def register_new_customer(self, customer_ticket_id, bakery_id, bread_requirements, customer_in_upcoming_customer=False, token: str | None = None):
     with session_scope() as db:
-        c_id = crud.new_customer_no_commit(db, customer_ticket_id, bakery_id, True)
+        c_id = crud.new_customer_no_commit(db, customer_ticket_id, bakery_id, True, token)
         crud.new_bread_customers(db, c_id, bread_requirements)
         if customer_in_upcoming_customer:
             crud.new_customer_to_upcoming_customers(db, c_id)

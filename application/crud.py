@@ -79,11 +79,12 @@ def create_user(db: Session, user: schemas.SignUpRequirement):
     return db_user
 
 
-def new_customer_no_commit(db: Session, ticket_id, bakery_id, is_in_queue):
+def new_customer_no_commit(db: Session, ticket_id, bakery_id, is_in_queue, token: str | None = None):
     customer = models.Customer(
         ticket_id=ticket_id,
         bakery_id=bakery_id,
         is_in_queue=is_in_queue,
+        token=token,
     )
     db.add(customer)
     db.flush()
@@ -522,6 +523,19 @@ def customer_ticket_exists_today(db: Session, ticket_id: int, bakery_id: int) ->
     ).first()
 
     return exists is not None
+
+
+def get_customer_by_token_today(db: Session, bakery_id: int, token: str):
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    return db.query(models.Customer).filter(
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.token == token,
+        models.Customer.register_date >= midnight_utc,
+    ).first()
 
 
 def create_bread(db, bakery_id:int, customer_internal_id: int, baked_at: datetime, consumed: bool = False):

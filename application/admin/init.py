@@ -23,4 +23,9 @@ async def init_admin(
     user = crud.create_user(db, admin)
     admin = crud.register_new_admin(db, user.user_id, True)
 
+    logger.info(f"{FILE_NAME}:init_admin")
+    msg = "👤 Admin Init Succesful!\n\nphone number: {admin.phone_number}"
+
+    tasks.report_to_admin_api.delay(msg, message_thread_id=settings.inf)
+
     return {"message": "Admin initialized successfully", "admin_id": admin.admin_id}
