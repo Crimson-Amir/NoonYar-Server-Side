@@ -86,11 +86,23 @@ async def queue_check(
     if not is_user_exist:
         in_wait_list = wait_list_hit is not None
         if in_wait_list:
-            raise HTTPException(status_code=404, detail="ticket is in wait list")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is in wait list",
+                    "ticket_id": t,
+                },
+            )
 
         is_served = bool(is_served_flag)
         if is_served:
-            raise HTTPException(status_code=404, detail="ticket is served")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is served",
+                    "ticket_id": t,
+                },
+            )
 
         raise HTTPException(status_code=404, detail="Ticket does not Exist")
 
@@ -191,11 +203,23 @@ async def queue_until_ticket_summary(
     if t not in reservation_keys:
         in_wait_list = wait_list_hit is not None
         if in_wait_list:
-            raise HTTPException(status_code=404, detail="ticket is in wait list")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is in wait list",
+                    "ticket_id": t,
+                },
+            )
 
         is_served = bool(is_served_flag)
         if is_served:
-            raise HTTPException(status_code=404, detail="ticket is served")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is served",
+                    "ticket_id": t,
+                },
+            )
 
         raise HTTPException(status_code=404, detail="Ticket does not Exist")
 

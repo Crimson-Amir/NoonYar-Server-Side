@@ -120,11 +120,23 @@ async def res_admin_queue_status(
     if not is_user_exist:
         in_wait_list = wait_list_hit is not None
         if in_wait_list:
-            raise HTTPException(status_code=404, detail="ticket is in wait list")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is in wait list",
+                    "ticket_id": ticket_id,
+                },
+            )
 
         is_served = bool(is_served_flag)
         if is_served:
-            raise HTTPException(status_code=404, detail="ticket is served")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is served",
+                    "ticket_id": ticket_id,
+                },
+            )
 
         raise HTTPException(status_code=404, detail="Ticket does not Exist")
 
