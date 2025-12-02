@@ -135,7 +135,7 @@ async def queue_check(
         reservation_keys,
         reservation_number,
         reservation_dict
-    ) * average_bread_time
+    ) // 2 * average_bread_time
 
     user_breads_persian = user_breads = None
     if is_user_exist:
