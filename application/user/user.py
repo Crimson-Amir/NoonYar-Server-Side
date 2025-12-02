@@ -86,11 +86,18 @@ async def queue_check(
     if not is_user_exist:
         in_wait_list = wait_list_hit is not None
         if in_wait_list:
+            bread_ids_sorted = sorted(bread_time.keys())
+            wait_list_counts = list(map(int, wait_list_hit.split(','))) if wait_list_hit else []
+            user_breads_persian = {
+                bread_names.get(bid, str(bid)): count
+                for bid, count in zip(bread_ids_sorted, wait_list_counts)
+            }
             raise HTTPException(
                 status_code=404,
                 detail={
                     "message": "ticket is in wait list",
                     "ticket_id": t,
+                    "user_breads": user_breads_persian,
                 },
             )
 
