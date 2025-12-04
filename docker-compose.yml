@@ -13,6 +13,8 @@ services:
         condition: service_healthy
     expose:
       - "80"
+    ports:
+      - "8000:80"
     restart: unless-stopped
 
   worker:
