@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     # Database
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
     NEW_USER_THREAD_ID: int
     INFO_THREAD_ID: int
     HARDWARE_CLIENT_ERROR_THREAD_ID: int
+    TELEGRAM_PROXY_URL: Optional[str] = None
 
     # SMS
     SMS_KEY: str

@@ -551,7 +551,7 @@ import notificationUrl from '@/assets/Ting.mp3';
 
 // 🛠 تنظیمات ورودی
 const route = useRoute();
-const API_BASE = 'http://noonyar.freebyte.shop';
+const API_BASE = 'https://api.noonyar.ir';
 
 // State
 const currentTurn = ref(null);
