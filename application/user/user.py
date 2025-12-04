@@ -69,6 +69,22 @@ async def queue_check(
     if not bread_time:
         return {'msg': 'bakery does not exist or does not have any bread'}
     if not reservation_dict:
+        # Queue is empty, but user might be in wait list
+        if wait_list_hit is not None:
+            bread_ids_sorted = sorted(bread_time.keys())
+            wait_list_counts = list(map(int, wait_list_hit.split(','))) if wait_list_hit else []
+            user_breads_persian = {
+                bread_names.get(bid, str(bid)): count
+                for bid, count in zip(bread_ids_sorted, wait_list_counts)
+            }
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is in wait list",
+                    "ticket_id": t,
+                    "user_breads": user_breads_persian,
+                },
+            )
         return {'msg': 'queue is empty'}
 
     reservation_keys = sorted(reservation_dict.keys())
@@ -199,6 +215,15 @@ async def queue_until_ticket_summary(
     if not time_per_bread_raw:
         return {'msg': 'bakery does not exist or does not have any bread'}
     if not reservations_map:
+        # Queue is empty, but user might be in wait list
+        if wait_list_hit is not None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "message": "ticket is in wait list",
+                    "ticket_id": t,
+                },
+            )
         return {'msg': 'queue is empty'}
 
     reservation_dict = {
