@@ -93,6 +93,15 @@ services:
       db:
         condition: service_healthy
 
+  frontend:
+    image: voidtrek/noonyar_frontend
+    depends_on:
+      web:
+        condition: service_started
+    ports:
+      - "8000:80"
+    restart: unless-stopped
+
   watchtower:
     image: containrrr/watchtower
     volumes:
