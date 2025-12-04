@@ -11,8 +11,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     restart: unless-stopped
 
   worker:
@@ -98,9 +98,23 @@ services:
     depends_on:
       web:
         condition: service_started
-    ports:
-      - "8000:80"
+    expose:
+      - "80"
     restart: unless-stopped
+
+  nginx:
+    image: voidtrek/noonyar_nginx:latest
+    volumes:
+      # Mount host's certbot directory so nginx can read /etc/letsencrypt/live/... certs
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      web:
+        condition: service_started
+      frontend:
+        condition: service_started
 
   watchtower:
     image: containrrr/watchtower

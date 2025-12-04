@@ -904,12 +904,6 @@ onUnmounted(() => {
 </script>
 
 <style>
-@import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn-font@v33.003/dist/font-face.css');
-
-.font-fa {
-    font-family: 'Vazirmatn', sans-serif;
-}
-
 .dir-ltr {
     direction: ltr;
 }

@@ -90,12 +90,6 @@ const getParticleStyle = (n) => {
 </script>
 
 <style scoped>
-@import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn-font@v33.003/dist/font-face.css');
-
-.font-fa {
-    font-family: 'Vazirmatn', sans-serif;
-}
-
 .perspective-container {
     perspective: 1000px;
 }
