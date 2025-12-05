@@ -96,6 +96,7 @@ class Customer(Base):
     bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'))
     is_in_queue = Column(Boolean, nullable=False)
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
+    rating = Column(Integer, nullable=True)
     token = Column(String(5), nullable=True, index=True)
 
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")

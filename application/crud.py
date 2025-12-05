@@ -525,6 +525,35 @@ def customer_ticket_exists_today(db: Session, ticket_id: int, bakery_id: int) ->
     return exists is not None
 
 
+def get_customer_by_ticket_id_any_status(db: Session, ticket_id: int, bakery_id: int):
+    """Return today's Customer row for this bakery and ticket_id, regardless of is_in_queue.
+
+    This is useful for admin and user endpoints that need the internal
+    customer_id even if the ticket has moved to the wait list or been served.
+    """
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    return db.query(models.Customer).filter(
+        models.Customer.ticket_id == ticket_id,
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.register_date >= midnight_utc,
+    ).first()
+
+
+def set_customer_rating(db: Session, customer_id: int, rate: int):
+    customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
+    if not customer:
+        return None
+
+    customer.rating = rate
+    db.commit()
+    db.refresh(customer)
+    return customer
+
+
 def get_customer_by_token_today(db: Session, bakery_id: int, token: str):
     tehran = pytz.timezone("Asia/Tehran")
     now_tehran = datetime.now(tehran)

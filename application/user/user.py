@@ -41,6 +41,7 @@ async def queue_check(
         raise HTTPException(status_code=404, detail="Customer not found for token")
 
     t = customer.ticket_id
+    customer_id = customer.id
 
     # Redis keys
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -82,6 +83,7 @@ async def queue_check(
                 detail={
                     "message": "ticket is in wait list",
                     "ticket_id": t,
+                    "customer_id": customer_id,
                     "user_breads": user_breads_persian,
                 },
             )
@@ -124,6 +126,7 @@ async def queue_check(
                 detail={
                     "message": "ticket is served",
                     "ticket_id": t,
+                    "customer_id": customer_id,
                 },
             )
 
@@ -178,7 +181,23 @@ async def queue_check(
         "in_queue_customers_time": in_queue_customers_time,
         "user_breads": user_breads_persian,
         "current_ticket_id": current_ticket_id,
-        "ticket_id": t
+        "ticket_id": t,
+        "customer_id": customer_id,
+    }
+
+
+@router.post("/rate/")
+@handle_errors
+async def rate_customer(payload: schemas.RateRequest):
+    with SessionLocal() as db:
+        customer = crud.set_customer_rating(db, payload.customer_id, payload.rate)
+
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    return {
+        "customer_id": customer.id,
+        "rating": customer.rating,
     }
 
 

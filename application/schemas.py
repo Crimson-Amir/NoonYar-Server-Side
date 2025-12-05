@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, conint
 from typing import Dict
 
 class SignUpRequirement(BaseModel):
@@ -89,3 +89,8 @@ class UpcomingNotifyRequest(BakeryID):
 
 class UpdateTimeoutRequest(BakeryID):
     seconds: int
+
+
+class RateRequest(BaseModel):
+    customer_id: int
+    rate: conint(ge=1, le=5)

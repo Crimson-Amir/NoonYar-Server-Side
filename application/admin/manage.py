@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from application import crud, schemas
+from application.database import SessionLocal
 from application.helpers import redis_helper, endpoint_helper
 from application.algorithm import Algorithm
 from sqlalchemy.orm import Session
@@ -116,6 +117,7 @@ async def res_admin_queue_status(
                 detail={
                     "message": "ticket is in wait list",
                     "ticket_id": ticket_id,
+                    "customer_id": None,
                     "user_breads": user_breads_persian,
                 },
             )
@@ -131,6 +133,13 @@ async def res_admin_queue_status(
         except (TypeError, ValueError):
             current_ticket_id = None
 
+    # Look up today's Customer row (any status) to expose customer_id in responses
+    customer_id = None
+    with SessionLocal() as db:
+        customer = crud.get_customer_by_ticket_id_any_status(db, ticket_id, bakery_id)
+        if customer:
+            customer_id = customer.id
+
     is_user_exist = ticket_id in reservation_keys
 
     if not is_user_exist:
@@ -138,6 +147,7 @@ async def res_admin_queue_status(
         if in_wait_list:
             bread_ids_sorted = sorted(bread_time.keys())
             wait_list_counts = list(map(int, wait_list_hit.split(','))) if wait_list_hit else []
+
             user_breads_persian = {
                 bread_names.get(bid, str(bid)): count
                 for bid, count in zip(bread_ids_sorted, wait_list_counts)
@@ -147,6 +157,7 @@ async def res_admin_queue_status(
                 detail={
                     "message": "ticket is in wait list",
                     "ticket_id": ticket_id,
+                    "customer_id": customer_id,
                     "user_breads": user_breads_persian,
                 },
             )
@@ -158,6 +169,7 @@ async def res_admin_queue_status(
                 detail={
                     "message": "ticket is served",
                     "ticket_id": ticket_id,
+                    "customer_id": customer_id,
                 },
             )
 
@@ -211,4 +223,6 @@ async def res_admin_queue_status(
         "in_queue_customers_time": in_queue_customers_time,
         "user_breads": user_breads_persian,
         "current_ticket_id": current_ticket_id,
+        "ticket_id": ticket_id,
+        "customer_id": customer_id,
     }
