@@ -408,7 +408,15 @@ async def current_cook_customer(
             breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
 
     # ============================================================
-    # LOGIC: Determine which customer we're working on (same as new_bread)
+    # LOGIC: Determine which customer's breads are currently relevant
+    #
+    # For hardware restart, we want the customer whose breads are
+    # *currently* in play, not the one that would come *after* the
+    # next bread is baked. To achieve this we:
+    #   1) Prefer the customer of the most recently baked bread.
+    #   2) If there is no bread yet (fresh start) or that customer is
+    #      no longer in today's active reservations, fall back to the
+    #      first incomplete reservation in the queue.
     # ============================================================
     def get_customer_needs(customer_id):
         """Get total breads needed for a customer."""
@@ -424,81 +432,43 @@ async def current_cook_customer(
         counts = list(map(int, reservations_map[str(customer_id)].split(',')))
         return {bid: count for bid, count in zip(bread_ids_sorted, counts)}
 
+    # 1) Try to use the customer of the most recently baked bread.
+    last_customer_id = None
+    if all_breads:
+        last_value = all_breads[-1]
+        if ':' in last_value:
+            try:
+                last_customer_id = int(last_value.split(':')[1])
+            except ValueError:
+                last_customer_id = None
+
     working_customer_id = None
-    breads_made = 0
-    last_completed_customer = None
 
-    if prep_state_str and order_ids:
-        # Check if we're currently working on a customer
-        state_customer_id, state_bread_count = map(int, prep_state_str.split(':'))
+    # Only trust last_customer_id if it still exists in today's
+    # reservations (i.e., it's an active ticket, not an old one that
+    # was removed from the queue).
+    if last_customer_id is not None and str(last_customer_id) in reservations_map:
+        working_customer_id = last_customer_id
 
-        # Verify this customer still exists in the queue and is incomplete
-        if state_customer_id in order_ids:
-            needed = get_customer_needs(state_customer_id)
-            already_made = breads_per_customer.get(state_customer_id, 0)
-
-            if already_made < needed:
-                # Continue with this customer (don't jump to earlier insertions)
-                working_customer_id = state_customer_id
-                breads_made = already_made
-            else:
-                # This customer is now complete
-                last_completed_customer = state_customer_id
-
-    # If no valid customer from prep_state, scan from beginning
+    # 2) If there is no bread yet or the last bread's customer is not
+    #    part of the active reservations anymore, fall back to the
+    #    first incomplete customer in the queue.
     if working_customer_id is None and order_ids:
         for customer_id in order_ids:
+            if str(customer_id) not in reservations_map:
+                continue
             needed = get_customer_needs(customer_id)
             already_made = breads_per_customer.get(customer_id, 0)
 
             if already_made < needed:
-                # Found first incomplete customer
                 working_customer_id = customer_id
-                breads_made = already_made
-                break
-            else:
-                # This customer is complete
-                last_completed_customer = customer_id
-
-    # ============================================================
-    # SIMULATION: If we baked one more bread now, what would cook see?
-    # ============================================================
-    bread_belongs_to = working_customer_id or 0
-    breads_made += 1 if working_customer_id else 0
-
-    customer_needs = get_customer_needs(working_customer_id)
-    is_customer_done = breads_made >= customer_needs if working_customer_id else False
-
-    if is_customer_done:
-        # Customer would be complete after this bread - find next incomplete customer
-        if working_customer_id:
-            breads_per_customer[working_customer_id] = breads_made
-
-        # Search from beginning to handle out-of-order insertions
-        next_customer = None
-        for customer_id in order_ids:
-            needed = get_customer_needs(customer_id)
-            already_made = breads_per_customer.get(customer_id, 0)
-            if already_made < needed:
-                next_customer = customer_id
                 break
 
-        if next_customer:
-            response = {
-                "customer_id": next_customer,
-                "customer_breads": get_customer_breads_dict(next_customer),
-                "next_customer": True,
-            }
-        else:
-            response = {
-                "has_customer": False,
-                "belongs_to_customer": True,
-            }
-    elif working_customer_id:
+    if working_customer_id:
         response = {
             "customer_id": working_customer_id,
             "customer_breads": get_customer_breads_dict(working_customer_id),
-            "next_customer": False
+            "next_customer": False,
         }
     else:
         response = {
