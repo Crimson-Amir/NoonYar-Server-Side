@@ -4,7 +4,7 @@ from application.helpers import endpoint_helper, redis_helper, token_helpers
 from application.algorithm import Algorithm
 from application.auth import decode_token
 from application.database import SessionLocal
-from application import crud
+from application import crud, schemas
 
 router = APIRouter(
     prefix='',
