@@ -37,5 +37,6 @@ def generate_daily_customer_token(bakery_id: int, ticket_id: int) -> str:
         num, rem = divmod(num, base)
         chars.append(alphabet[rem])
 
-    token = "".join(reversed(chars)).lstrip("0")
-    return token or "0"
+    # Always return exactly 5 characters (including leading zeros).
+    token = "".join(reversed(chars))
+    return token
