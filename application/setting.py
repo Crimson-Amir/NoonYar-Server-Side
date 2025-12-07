@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     ERR_THREAD_ID: int
     NEW_USER_THREAD_ID: int
     INFO_THREAD_ID: int
+    BAKERY_TICKET_THREAD_ID: int
+    RATE_THREAD_ID: int
     HARDWARE_CLIENT_ERROR_THREAD_ID: int
     TELEGRAM_PROXY_URL: Optional[str] = None
 

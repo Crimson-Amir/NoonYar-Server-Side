@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException
 from application.database import SessionLocal
 from application.tasks import report_to_admin_api
+from application.setting import settings
 import traceback
 from uuid import uuid4
 from application.logger_config import logger
@@ -17,7 +18,38 @@ def get_db():
 
 from functools import wraps
 
-def log_and_report_error(context: str, error: Exception, extra: dict = None):
+
+async def report_to_admin(level: str, fun_name: str, msg: str):
+    """Generic Telegram reporting helper.
+
+    level: logical level / category (e.g. 'info', 'error', 'ticket', 'rate').
+    fun_name: context or function name for the log.
+    msg: main message body (multi-line allowed).
+    """
+    try:
+        report_level = {
+            "info": {"thread_id": settings.INFO_THREAD_ID, "emoji": "🔵"},
+            "warning": {"thread_id": settings.INFO_THREAD_ID, "emoji": "🟡"},
+            "error": {"thread_id": settings.ERR_THREAD_ID, "emoji": "🔴"},
+            "emergency_error": {"thread_id": settings.ERR_THREAD_ID, "emoji": "🔴🔴"},
+            "ticket": {"thread_id": settings.BAKERY_TICKET_THREAD_ID, "emoji": "🎫"},
+            "rate": {"thread_id": settings.RATE_THREAD_ID, "emoji": "⭐"},
+            "hardware_error": {"thread_id": settings.HARDWARE_CLIENT_ERROR_THREAD_ID, "emoji": "🔴"},
+        }
+
+        conf = report_level.get(level, {})
+        emoji = conf.get("emoji", "🔵")
+        thread_id = conf.get("thread_id", settings.INFO_THREAD_ID)
+
+        message = f"{emoji} Report {level.replace('_', ' ')} {fun_name}\n\n{msg}"
+
+        report_to_admin_api.delay(message, message_thread_id=thread_id)
+
+    except Exception as e:
+        logger.error("error in report_to_admin", extra={"error": str(e)})
+
+
+async def log_and_report_error(context: str, error: Exception, extra: dict = None):
     tb = traceback.format_exc()
     error_id = uuid4().hex
     extra = extra or {}
@@ -26,13 +58,14 @@ def log_and_report_error(context: str, error: Exception, extra: dict = None):
         context, extra={"error": str(error), "traceback": tb, **extra}
     )
     err_msg = (
-        f"[🔴 ERROR] {context}:"
-        f"\n\nError type: {type(error)}"
+        f"Error type: {type(error)}"
         f"\nError reason: {str(error)}"
-        f"\n\nExtera Info:"
+        f"\n\nExtra Info:"
         f"\n{extra}"
+        f"\n\nTraceback:\n{tb}"
     )
-    report_to_admin_api.delay(err_msg)
+
+    await report_to_admin("error", context, err_msg)
 
 def db_transaction(context: str):
     def decorator(func):
@@ -44,7 +77,7 @@ def db_transaction(context: str):
                 raise e
             except Exception as e:
                 db.rollback()
-                log_and_report_error(f"{context}:{func.__name__}", e, extra={})
+                await log_and_report_error(f"{context}:{func.__name__}", e, extra={})
                 raise HTTPException(status_code=500, detail={
                     "message": "Internal server error",
                     "type": type(e).__name__,
@@ -62,7 +95,7 @@ def handle_endpoint_errors(context: str):
             except HTTPException as e:
                 raise e
             except Exception as e:
-                log_and_report_error(f"{context}:{func.__name__}", e, extra={})
+                await log_and_report_error(f"{context}:{func.__name__}", e, extra={})
                 raise HTTPException(status_code=500, detail={
                     "message": "Internal server error",
                     "type": type(e).__name__,

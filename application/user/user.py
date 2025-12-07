@@ -195,9 +195,17 @@ async def rate_customer(payload: schemas.RateRequest):
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    rate_msg = (
+        f"Bakery ID: {customer.bakery_id}"
+        f"\nTicket Number: {customer.ticket_id}"
+        f"\nCustomer ID: {customer.id}"
+        f"\nRate: {payload.rate}"
+    )
+
+    await endpoint_helper.report_to_admin("rate", f"{FILE_NAME}:rate_customer", rate_msg)
+
     return {
-        "customer_id": customer.id,
-        "rating": customer.rating,
+        "status": "OK" 
     }
 
 

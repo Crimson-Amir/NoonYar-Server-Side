@@ -79,6 +79,23 @@ async def new_ticket(
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display, "token": customer_token})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token)
 
+    # Telegram log: new ticket
+    bread_names = await redis_helper.get_bakery_bread_names(r)
+    bread_lines = []
+    for bid, count in bread_requirements.items():
+        name = bread_names.get(str(bid), str(bid)) if bread_names else str(bid)
+        bread_lines.append(f"- {name} (id: {bid}): {count}")
+
+    ticket_msg = (
+        f"Bakery ID: {bakery_id}"
+        f"\nTicket Number: {customer_ticket_id}"
+        f"\nShow On Display: {show_on_display}"
+        f"\nToken: {customer_token}"
+        f"\n\nBread Requirements:\n" + "\n".join(bread_lines)
+    )
+
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:new_ticket", ticket_msg)
+
     return {
         'customer_ticket_id': customer_ticket_id,
         'show_on_display': show_on_display,
@@ -197,6 +214,15 @@ async def serve_ticket_by_token(
         "token": token_value,
         "user_detail": user_detail,
     })
+
+    # Telegram log: serve ticket by token
+    serve_msg = (
+        f"Bakery ID: {bakery_id}"
+        f"\nTicket Number: {customer_id}"
+        f"\nCustomer ID: {customer.id}"
+        f"\nToken: {token_value}"
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:serve_ticket_by_token", serve_msg)
 
     await redis_helper.add_served_ticket(r, bakery_id, customer_id)
 
@@ -335,6 +361,13 @@ async def send_ticket_to_wait_list(
 
     logger.info(f"Removed {removed} breads for ticket {customer_id}")
     logger.info(f"{FILE_NAME}:send_ticket_to_wait_list", extra={"bakery_id": bakery_id, "customer_id": customer_id})
+
+    # Telegram log: ticket moved to wait list
+    wait_list_msg = (
+        f"Bakery ID: {bakery_id}"
+        f"\nTicket Number: {customer_id}"
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:send_ticket_to_wait_list", wait_list_msg)
     return {
         "next_ticket_id": next_ticket_id,
         "next_user_detail": next_user_detail

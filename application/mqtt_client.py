@@ -30,7 +30,7 @@ async def mqtt_handler(app):
 
         except Exception as e:
             mqtt_connected.clear()  # Signal disconnection
-            endpoint_helper.log_and_report_error('mqtt_client:mqtt_handler', e)
+            await endpoint_helper.log_and_report_error('mqtt_client:mqtt_handler', e)
             await asyncio.sleep(5)
 
 
@@ -41,7 +41,7 @@ async def safe_publish(request, topic: str, payload: dict):
         msg = json.dumps(payload)
         await request.app.state.mqtt_client.publish(topic, msg, qos=1)
     except Exception as e:
-        endpoint_helper.log_and_report_error(f'mqtt_client:safe_publish:{topic}', e)
+        await endpoint_helper.log_and_report_error(f'mqtt_client:safe_publish:{topic}', e)
 
 
 async def update_time_per_bread(request, bakery_id, new_config):
