@@ -165,7 +165,7 @@ async def queue_check(
     }
 
 
-@router.post("/rate/")
+@router.post("/rate")
 @handle_errors
 async def rate_customer(payload: schemas.RateRequest):
     with SessionLocal() as db:
