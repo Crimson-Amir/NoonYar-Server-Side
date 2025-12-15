@@ -78,6 +78,8 @@ async def queue_check(
             "message": "TICKET_IS_SERVED",
             "ticket_id": t,
             "customer_id": customer_id,
+            "rated": customer.rating is not None,
+            "rating": customer.rating,
         }
 
     if wait_list_hit is not None:
