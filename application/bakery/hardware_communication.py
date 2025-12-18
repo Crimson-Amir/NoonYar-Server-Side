@@ -276,10 +276,6 @@ async def current_ticket(
         r, bakery_id, user_breads, time_per_bread, reservation_keys, current_ticket_id, reservation_dict
     )
 
-    # Update user-facing current ticket only when this ticket is ready to be served.
-    if ready:
-        await redis_helper.set_user_current_ticket(r, bakery_id, current_ticket_id)
-
     return {
         "ready": ready,
         "wait_until": wait_until,
@@ -329,6 +325,9 @@ async def send_ticket_to_wait_list(
     await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
     await redis_helper.add_customer_to_wait_list(r, bakery_id, customer_id, reservations_str=current_customer_reservation)
+
+    # Update user-facing current ticket only when this ticket is ready to be served.
+    await redis_helper.set_user_current_ticket(r, bakery_id, customer_id)
     
     # Consume breads for this customer before rebuilding prep_state
     removed = await redis_helper.consume_ready_breads(r, bakery_id, customer_id)
