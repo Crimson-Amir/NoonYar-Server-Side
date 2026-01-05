@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 async def lifespan(app: FastAPI):
     app.state.redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
     fastapi_listener.start()
-    app.state.mqtt_client = aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT)
+    app.state.mqtt_client = aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT, timeout=30)
     app.state.mqtt_task = asyncio.create_task(mqtt_handler(app))
 
     async def send_task_with_retry():
