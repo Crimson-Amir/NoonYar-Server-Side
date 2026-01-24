@@ -261,3 +261,60 @@ async def queue_until_ticket_summary(
         "people_in_queue_until_this_ticket": people_in_queue_until_this_ticket,
         "tickets_and_their_bread_count": tickets_and_their_bread_count,
     }
+
+
+@router.get("/queue_all_ticket_summary/{bakery_id}")
+@handle_errors
+async def queue_all_ticket_summary(
+    request: Request,
+    bakery_id: int,
+):
+    """Public endpoint: summary of entire queue (all tickets) for a bakery."""
+    r = request.app.state.redis
+
+    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    name_key = redis_helper.REDIS_KEY_BREAD_NAMES
+
+    pipe = r.pipeline()
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    pipe.hgetall(name_key)
+    time_per_bread_raw, reservations_map, bread_names_raw = await pipe.execute()
+
+    if not time_per_bread_raw:
+        return {'msg': 'bakery does not exist or does not have any bread'}
+
+    if not reservations_map:
+        return {'msg': 'queue is empty'}
+
+    reservation_dict = {
+        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
+    }
+
+    reservation_keys = sorted(reservation_dict.keys())
+
+    bread_ids_sorted = sorted(int(k) for k in time_per_bread_raw.keys())
+    bread_names = {int(k): v for k, v in bread_names_raw.items()} if bread_names_raw else {}
+
+    with SessionLocal() as db:
+        token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, reservation_keys)
+
+    result = {}
+    for ticket_id in reservation_keys:
+        counts = reservation_dict[ticket_id]
+        if len(counts) != len(bread_ids_sorted):
+            raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
+
+        breads_by_name = {}
+        for bid, count in zip(bread_ids_sorted, counts):
+            if int(count) <= 0:
+                continue
+            breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
+
+        result[str(ticket_id)] = {
+            "token": token_map.get(ticket_id),
+            "breads": breads_by_name,
+        }
+
+    return result

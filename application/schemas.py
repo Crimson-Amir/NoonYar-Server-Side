@@ -30,6 +30,11 @@ class BakeryID(BaseModel):
 class NewCustomerRequirement(BakeryID):
     bread_requirements: Dict[str, int]
 
+
+class ModifyTicketRequirement(BakeryID):
+    customer_ticket_id: int
+    bread_requirements: Dict[str, int]
+
 class TickeOperationtRequirement(BakeryID):
     customer_ticket_id: int
 

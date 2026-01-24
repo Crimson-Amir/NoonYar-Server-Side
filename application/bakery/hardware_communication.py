@@ -75,7 +75,12 @@ async def new_ticket(
     # This consumes the flag so only the *first* ticket after idle
     # returns show_on_display = True.
     show_on_display = await redis_helper.consume_display_flag(r, bakery_id)
-
+    
+    if show_on_display:
+        existing_cs = await redis_helper.get_current_served(r, bakery_id)
+        if customer_ticket_id > existing_cs:
+            await redis_helper.set_current_served(r, bakery_id, customer_ticket_id)
+    
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display, "token": customer_token})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token)
 
@@ -100,6 +105,133 @@ async def new_ticket(
         'customer_ticket_id': customer_ticket_id,
         'show_on_display': show_on_display,
         'token': customer_token,
+    }
+
+
+@router.put('/modify_ticket')
+@handle_errors
+async def modify_ticket(
+        request: Request,
+        payload: schemas.ModifyTicketRequirement,
+        token: str = Depends(validate_token)
+):
+    bakery_id = payload.bakery_id
+
+    if not token_helpers.verify_bakery_token(token, bakery_id):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    customer_ticket_id = payload.customer_ticket_id
+    bread_requirements = payload.bread_requirements
+
+    if any(v < 0 for v in bread_requirements.values()):
+        raise HTTPException(status_code=400, detail="Bread values cannot be negative")
+
+    if sum(bread_requirements.values()) <= 0:
+        raise HTTPException(status_code=400, detail="Ticket should have at least one bread")
+
+    r = request.app.state.redis
+
+    time_per_bread = await redis_helper.get_bakery_time_per_bread(r, bakery_id)
+    if not time_per_bread:
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
+
+    if set(time_per_bread.keys()) != set(bread_requirements.keys()):
+        raise HTTPException(status_code=400, detail="Invalid bread types")
+
+    bread_ids = list(time_per_bread.keys())
+    encoded_reservation = ",".join(str(int(bread_requirements.get(bid, 0))) for bid in bread_ids)
+
+    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+    all_breads = await r.zrangebyscore(breads_key, '-inf', '+inf')
+    baked_count = 0
+    suffix = f":{customer_ticket_id}"
+    for bread_value in all_breads:
+        if isinstance(bread_value, bytes):
+            try:
+                bread_value = bread_value.decode()
+            except Exception:
+                continue
+
+        if isinstance(bread_value, str) and bread_value.endswith(suffix):
+            baked_count += 1
+
+    if baked_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Ticket has started baking and cannot be modified",
+                "baked_count": baked_count,
+            }
+        )
+
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+
+    pipe0 = r.pipeline()
+    pipe0.hexists(res_key, str(customer_ticket_id))
+    pipe0.hexists(wait_list_key, str(customer_ticket_id))
+    pipe0.sismember(served_key, int(customer_ticket_id))
+    in_queue, in_wait_list, is_served = await pipe0.execute()
+
+    if bool(is_served):
+        raise HTTPException(status_code=400, detail={"error": "Ticket is already served"})
+
+    if not (in_queue or in_wait_list):
+        await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+        await redis_helper.get_bakery_wait_list(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=time_per_bread)
+        pipe_retry = r.pipeline()
+        pipe_retry.hexists(res_key, str(customer_ticket_id))
+        pipe_retry.hexists(wait_list_key, str(customer_ticket_id))
+        in_queue, in_wait_list = await pipe_retry.execute()
+
+    if not (in_queue or in_wait_list):
+        raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
+
+    ttl = seconds_until_midnight_iran()
+    pipe = r.pipeline()
+    if in_queue:
+        pipe.hset(res_key, str(customer_ticket_id), encoded_reservation)
+        pipe.zadd(order_key, {str(customer_ticket_id): int(customer_ticket_id)})
+        pipe.expire(res_key, ttl)
+        pipe.expire(order_key, ttl)
+    else:
+        pipe.hset(wait_list_key, str(customer_ticket_id), encoded_reservation)
+        pipe.expire(wait_list_key, ttl)
+    await pipe.execute()
+
+    upcoming_breads = await redis_helper.get_bakery_upcoming_breads(r, bakery_id)
+    if upcoming_breads:
+        should_be_upcoming = any((bid in upcoming_breads and int(count) > 0) for bid, count in bread_requirements.items())
+        if should_be_upcoming:
+            await redis_helper.maybe_add_customer_to_upcoming_zset(
+                r, bakery_id, customer_ticket_id, bread_requirements, upcoming_members=set(upcoming_breads)
+            )
+        else:
+            await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_ticket_id)
+
+    with SessionLocal() as db:
+        ok = crud.update_customer_breads_for_ticket_today(db, bakery_id, customer_ticket_id, bread_requirements)
+
+    if not ok:
+        raise HTTPException(status_code=404, detail={"error": "Customer not found"})
+
+    await redis_helper.rebuild_prep_state(r, bakery_id)
+
+    logger.info(f"{FILE_NAME}:modify_ticket", extra={
+        "bakery_id": bakery_id,
+        "customer_ticket_id": customer_ticket_id,
+        "in_queue": bool(in_queue),
+        "in_wait_list": bool(in_wait_list),
+        "baked_count": baked_count,
+        "bread_requirements": bread_requirements,
+    })
+
+    return {
+        "status": "OK",
+        "customer_ticket_id": customer_ticket_id,
+        "location": "queue" if in_queue else "wait_list",
     }
 
 

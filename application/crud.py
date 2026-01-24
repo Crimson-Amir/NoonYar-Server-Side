@@ -105,6 +105,17 @@ def new_bread_customers(db: Session, customer_id: int, bread_requirements: dict[
     ]
     db.add_all(objs)
 
+
+def update_customer_breads_for_ticket_today(db: Session, bakery_id: int, ticket_id: int, bread_requirements: dict[str, int]) -> bool:
+    customer = get_customer_by_ticket_id_any_status(db, ticket_id, bakery_id)
+    if not customer:
+        return False
+
+    db.query(models.CustomerBread).filter(models.CustomerBread.customer_id == customer.id).delete(synchronize_session=False)
+    new_bread_customers(db, customer.id, bread_requirements)
+    db.commit()
+    return True
+
 def new_customer_to_upcoming_customers(db: Session, customer_id):
     upcoming_customer = models.UpcomingCustomer(
         customer_id=customer_id
@@ -565,6 +576,24 @@ def get_customer_by_token_today(db: Session, bakery_id: int, token: str):
         models.Customer.token == token,
         models.Customer.register_date >= midnight_utc,
     ).first()
+
+
+def get_customer_tokens_by_ticket_ids_today(db: Session, bakery_id: int, ticket_ids: list[int]) -> dict[int, str | None]:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    if not ticket_ids:
+        return {}
+
+    rows = db.query(models.Customer.ticket_id, models.Customer.token).filter(
+        models.Customer.bakery_id == bakery_id,
+        models.Customer.ticket_id.in_(ticket_ids),
+        models.Customer.register_date >= midnight_utc,
+    ).all()
+
+    return {int(ticket_id): token for ticket_id, token in rows}
 
 
 def create_bread(db, bakery_id:int, customer_internal_id: int, baked_at: datetime, consumed: bool = False):

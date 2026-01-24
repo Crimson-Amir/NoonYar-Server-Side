@@ -51,7 +51,10 @@ async def modify_bakery(request: Request, bakery: schemas.ModifyBakery, db: Sess
         await redis_helper.initialize_redis_sets(r, bakery.bakery_id)
     else:
         await redis_helper.purge_bakery_data(r, bakery.bakery_id)
-    logger.info(f"{FILE_NAME}:modify_bakery", extra=bakery.model_dump())
+    logger.info(
+        f"{FILE_NAME}:modify_bakery",
+        extra={c.name: getattr(bakery, c.name) for c in bakery.__table__.columns}
+    )
     return {"status": "OK"}
 
 
