@@ -33,6 +33,158 @@ def require_admin(
     return user_id
 
 
+@router.post('/urgent/inject')
+@handle_errors
+async def urgent_inject(
+        request: Request,
+        payload: schemas.UrgentInjectRequirement,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin),
+):
+    bakery_id = int(payload.bakery_id)
+    ticket_id = int(payload.ticket_id) if payload.ticket_id is not None else None
+    bread_requirements = payload.bread_requirements
+
+    if any(int(v) < 0 for v in bread_requirements.values()):
+        raise HTTPException(status_code=400, detail="Bread values cannot be negative")
+
+    if sum(int(v) for v in bread_requirements.values()) <= 0:
+        raise HTTPException(status_code=400, detail="Urgent item should have at least one bread")
+
+    r = request.app.state.redis
+    time_per_bread = await redis_helper.get_bakery_time_per_bread(r, bakery_id)
+    if not time_per_bread:
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
+
+    if set(time_per_bread.keys()) != set(bread_requirements.keys()):
+        raise HTTPException(status_code=400, detail="Invalid bread types")
+
+    if ticket_id is not None:
+        customer = crud.get_customer_by_ticket_id_any_status(db, ticket_id, bakery_id)
+        if not customer:
+            raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
+
+        bread_ids_sorted = sorted(time_per_bread.keys())
+        encoded_reservation = ",".join("0" for _ in bread_ids_sorted)
+
+        res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+        order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+        wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+        served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+        ttl = seconds_until_midnight_iran()
+
+        pipe = r.pipeline(transaction=True)
+        pipe.srem(served_key, int(ticket_id))
+        pipe.hdel(wait_list_key, str(ticket_id))
+        pipe.hset(res_key, str(ticket_id), encoded_reservation)
+        pipe.zadd(order_key, {str(ticket_id): int(ticket_id)})
+        pipe.expire(res_key, ttl)
+        pipe.expire(order_key, ttl)
+        pipe.expire(wait_list_key, ttl)
+        await pipe.execute()
+
+        crud.update_customer_status_to_true(db, ticket_id, bakery_id)
+
+    urgent_id = await redis_helper.create_urgent_item(
+        r,
+        bakery_id,
+        ticket_id,
+        bread_requirements,
+        time_per_bread=time_per_bread,
+    )
+
+    await redis_helper.rebuild_prep_state(r, bakery_id)
+
+    logger.info(f"{FILE_NAME}:urgent_inject", extra={
+        "bakery_id": bakery_id,
+        "urgent_id": urgent_id,
+        "ticket_id": ticket_id,
+        "bread_requirements": bread_requirements,
+    })
+
+    return {
+        "status": "OK",
+        "urgent_id": urgent_id,
+    }
+
+
+@router.put('/urgent/edit')
+@handle_errors
+async def urgent_edit(
+        request: Request,
+        payload: schemas.UrgentEditRequirement,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin),
+):
+    bakery_id = int(payload.bakery_id)
+    urgent_id = str(payload.urgent_id)
+    bread_requirements = payload.bread_requirements
+
+    if any(int(v) < 0 for v in bread_requirements.values()):
+        raise HTTPException(status_code=400, detail="Bread values cannot be negative")
+
+    if sum(int(v) for v in bread_requirements.values()) <= 0:
+        raise HTTPException(status_code=400, detail="Urgent item should have at least one bread")
+
+    r = request.app.state.redis
+    time_per_bread = await redis_helper.get_bakery_time_per_bread(r, bakery_id)
+    if not time_per_bread:
+        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
+
+    if set(time_per_bread.keys()) != set(bread_requirements.keys()):
+        raise HTTPException(status_code=400, detail="Invalid bread types")
+
+    ok = await redis_helper.update_urgent_item_if_pending(r, bakery_id, urgent_id, bread_requirements, time_per_bread)
+    if not ok:
+        raise HTTPException(status_code=400, detail={"error": "Urgent item cannot be edited (not found or not pending)"})
+
+    logger.info(f"{FILE_NAME}:urgent_edit", extra={
+        "bakery_id": bakery_id,
+        "urgent_id": urgent_id,
+        "bread_requirements": bread_requirements,
+    })
+
+    return {"status": "OK"}
+
+
+@router.delete('/urgent/delete')
+@handle_errors
+async def urgent_delete(
+        request: Request,
+        payload: schemas.UrgentDeleteRequirement,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin),
+):
+    bakery_id = int(payload.bakery_id)
+    urgent_id = str(payload.urgent_id)
+
+    r = request.app.state.redis
+    ok = await redis_helper.delete_urgent_item_if_pending(r, bakery_id, urgent_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail={"error": "Urgent item cannot be deleted (not found or not pending)"})
+
+    logger.info(f"{FILE_NAME}:urgent_delete", extra={
+        "bakery_id": bakery_id,
+        "urgent_id": urgent_id,
+    })
+
+    return {"status": "OK"}
+
+
+@router.get('/urgent/list/{bakery_id}')
+@handle_errors
+async def urgent_list(
+        bakery_id: int,
+        request: Request,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin),
+):
+    bakery_id = int(bakery_id)
+    r = request.app.state.redis
+    items = await redis_helper.list_urgent_items(r, bakery_id)
+    return {"items": items}
+
+
 @router.put('/modify_ticket')
 @handle_errors
 async def modify_ticket(

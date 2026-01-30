@@ -1003,12 +1003,18 @@ async def calculate_ready_status(
             if key > reservation_number:
                 break
 
-            breads_for_person = reservation_dict[key]
-            bread_ids = list(time_per_bread.keys())
-            total_wait_s += sum(
-                count * time_per_bread[bread_id]
-                for bread_id, count in zip(bread_ids, breads_for_person)
-            )
+            if int(key) == int(reservation_number):
+                total_wait_s += sum(
+                    int(count) * int(time_per_bread[str(bread_id)])
+                    for bread_id, count in effective_user_detail.items()
+                )
+            else:
+                breads_for_person = reservation_dict[key]
+                bread_ids = list(time_per_bread.keys())
+                total_wait_s += sum(
+                    count * time_per_bread[bread_id]
+                    for bread_id, count in zip(bread_ids, breads_for_person)
+                )
 
         if urgent_remaining_time:
             total_wait_s += int(urgent_remaining_time)
