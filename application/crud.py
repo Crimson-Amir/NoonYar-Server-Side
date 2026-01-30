@@ -139,6 +139,18 @@ def update_customer_status_to_false(db: Session, ticket_id: int, bakery_id: int)
 
     return customer_id
 
+def update_customer_status_to_true(db: Session, ticket_id: int, bakery_id: int):
+    stmt = (
+        update(models.Customer)
+        .where(models.Customer.ticket_id == ticket_id)
+        .where(models.Customer.bakery_id == bakery_id)
+        .values(is_in_queue=True)
+        .returning(models.Customer.id)
+    )
+    customer_id = db.execute(stmt).scalar()
+    db.commit()
+    return customer_id
+
 def update_all_customers_status_to_false(db: Session, bakery_id: int):
     stmt = (
         update(models.Customer)
@@ -554,6 +566,16 @@ def get_customer_by_ticket_id_any_status(db: Session, ticket_id: int, bakery_id:
     ).first()
 
 
+def delete_customer_by_ticket_id_today(db: Session, bakery_id: int, ticket_id: int) -> bool:
+    customer = get_customer_by_ticket_id_any_status(db, ticket_id, bakery_id)
+    if not customer:
+        return False
+
+    db.delete(customer)
+    db.commit()
+    return True
+
+
 def set_customer_rating(db: Session, customer_id: int, rate: int):
     customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
     if not customer:
@@ -594,6 +616,33 @@ def get_customer_tokens_by_ticket_ids_today(db: Session, bakery_id: int, ticket_
     ).all()
 
     return {int(ticket_id): token for ticket_id, token in rows}
+
+
+def get_customer_breads_by_ticket_ids_today(db: Session, bakery_id: int, ticket_ids: list[int]) -> dict[int, dict[int, int]]:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    if not ticket_ids:
+        return {}
+
+    rows = (
+        db.query(models.Customer.ticket_id, models.CustomerBread.bread_type_id, models.CustomerBread.count)
+        .join(models.CustomerBread, models.CustomerBread.customer_id == models.Customer.id)
+        .filter(
+            models.Customer.bakery_id == bakery_id,
+            models.Customer.ticket_id.in_(ticket_ids),
+            models.Customer.register_date >= midnight_utc,
+        )
+        .all()
+    )
+
+    out: dict[int, dict[int, int]] = {}
+    for ticket_id, bread_type_id, count in rows:
+        tid = int(ticket_id)
+        out.setdefault(tid, {})[int(bread_type_id)] = int(count)
+    return out
 
 
 def create_bread(db, bakery_id:int, customer_internal_id: int, baked_at: datetime, consumed: bool = False):

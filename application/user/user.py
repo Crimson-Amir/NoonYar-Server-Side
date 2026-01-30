@@ -275,46 +275,77 @@ async def queue_all_ticket_summary(
     time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
     name_key = redis_helper.REDIS_KEY_BREAD_NAMES
+    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+    served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
     pipe.hgetall(name_key)
-    time_per_bread_raw, reservations_map, bread_names_raw = await pipe.execute()
+    pipe.hgetall(wait_list_key)
+    pipe.smembers(served_key)
+    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_map, served_set = await pipe.execute()
 
     if not time_per_bread_raw:
         return {'msg': 'bakery does not exist or does not have any bread'}
 
-    if not reservations_map:
-        return {'msg': 'queue is empty'}
-
     reservation_dict = {
         int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
-    }
+    } if reservations_map else {}
+
+    wait_list_dict = {
+        int(k): [int(x) for x in v.split(',')] for k, v in wait_list_map.items()
+    } if wait_list_map else {}
 
     reservation_keys = sorted(reservation_dict.keys())
 
     bread_ids_sorted = sorted(int(k) for k in time_per_bread_raw.keys())
     bread_names = {int(k): v for k, v in bread_names_raw.items()} if bread_names_raw else {}
 
+    served_ids = set(int(x) for x in served_set) if served_set else set()
+    wait_list_ids = set(wait_list_dict.keys())
+
+    all_ticket_ids = sorted(set(reservation_keys) | wait_list_ids | served_ids)
+
+    if not all_ticket_ids:
+        return {'msg': 'queue is empty'}
+
     with SessionLocal() as db:
-        token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, reservation_keys)
+        token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
+        breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
 
     result = {}
-    for ticket_id in reservation_keys:
-        counts = reservation_dict[ticket_id]
-        if len(counts) != len(bread_ids_sorted):
-            raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
+    for ticket_id in all_ticket_ids:
+        if ticket_id in served_ids:
+            status = "TICKET_IS_SERVED"
+        elif ticket_id in wait_list_ids:
+            status = "TICKET_IS_IN_WAIT_LIST"
+        else:
+            status = "IN_QUEUE"
 
+        counts = reservation_dict.get(ticket_id) or wait_list_dict.get(ticket_id)
         breads_by_name = {}
-        for bid, count in zip(bread_ids_sorted, counts):
-            if int(count) <= 0:
-                continue
-            breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
+
+        if counts is not None:
+            if len(counts) != len(bread_ids_sorted):
+                raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
+
+            for bid, count in zip(bread_ids_sorted, counts):
+                if int(count) <= 0:
+                    continue
+                breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
+        else:
+            # Usually served tickets: reservation was removed from Redis.
+            bread_counts = breads_map_db.get(ticket_id, {})
+            for bid, count in bread_counts.items():
+                if int(count) <= 0:
+                    continue
+                breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
 
         result[str(ticket_id)] = {
             "token": token_map.get(ticket_id),
             "breads": breads_by_name,
+            "status": status,
         }
 
     return result

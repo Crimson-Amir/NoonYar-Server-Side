@@ -99,3 +99,21 @@ class UpdateTimeoutRequest(BakeryID):
 class RateRequest(BaseModel):
     customer_id: int
     rate: conint(ge=1, le=5)
+
+
+class UrgentInjectRequirement(BakeryID):
+    ticket_id: int | None = None
+    bread_requirements: Dict[str, int]
+
+
+class UrgentEditRequirement(BakeryID):
+    urgent_id: str
+    bread_requirements: Dict[str, int]
+
+
+class UrgentDeleteRequirement(BakeryID):
+    urgent_id: str
+
+
+class UrgentListRequirement(BakeryID):
+    pass
