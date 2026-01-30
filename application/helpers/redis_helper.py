@@ -897,8 +897,84 @@ async def initialize_redis_sets(r, bakery_id: int):
     await get_baking_time_s(r, bakery_id, fetch_from_redis_first=False)
     await get_timeout_second(r, bakery_id, fetch_from_redis_first=False)
     await load_breads_from_db(r, bakery_id)
+    await load_urgent_from_db(r, bakery_id, time_per_bread=time_per_bread)
     await rebuild_prep_state(r, bakery_id)
     await rebuild_display_state(r, bakery_id)
+
+
+async def load_urgent_from_db(r, bakery_id: int, time_per_bread: dict):
+    """Restore urgent queue from DB on startup.
+
+    We restore only today's urgent logs with statuses that can affect queue:
+    - PENDING -> urgent_queue ZSET
+    - PROCESSING -> urgent_prep_state + item status
+
+    This makes urgent injections resilient to Redis restarts.
+    """
+    if not time_per_bread:
+        return
+
+    bread_ids_sorted = sorted(time_per_bread.keys())
+    ttl = seconds_until_midnight_iran()
+
+    queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
+    prep_key = REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+
+    with SessionLocal() as db:
+        rows = crud.get_today_urgent_bread_logs(db, bakery_id, statuses=["PENDING", "PROCESSING"])
+
+    if not rows:
+        return
+
+    pipe = r.pipeline(transaction=True)
+    pipe.delete(queue_key)
+    pipe.delete(prep_key)
+
+    processing_id = None
+    pending_ids = []
+    for row in rows:
+        urgent_id = str(row.urgent_id)
+        item_key = get_urgent_item_key(bakery_id, urgent_id)
+
+        try:
+            original_map = json.loads(row.original_breads_json) if row.original_breads_json else {}
+        except Exception:
+            original_map = {}
+        try:
+            remaining_map = json.loads(row.remaining_breads_json) if row.remaining_breads_json else {}
+        except Exception:
+            remaining_map = {}
+
+        encoded_original = ",".join(
+            str(int(original_map.get(str(bid), original_map.get(bid, 0))))
+            for bid in bread_ids_sorted
+        )
+        encoded_remaining = ",".join(
+            str(int(remaining_map.get(str(bid), remaining_map.get(bid, 0))))
+            for bid in bread_ids_sorted
+        )
+
+        pipe.hset(item_key, mapping={
+            "ticket_id": "" if row.ticket_id is None else str(int(row.ticket_id)),
+            "original_breads": encoded_original,
+            "remaining_breads": encoded_remaining,
+            "status": str(row.status),
+            "created_at": str(int(row.register_date.timestamp())) if row.register_date else "",
+        })
+        pipe.expire(item_key, ttl)
+
+        if str(row.status) == "PROCESSING" and processing_id is None:
+            processing_id = urgent_id
+        else:
+            pending_ids.append((urgent_id, int(row.register_date.timestamp()) if row.register_date else int(time.time())))
+
+    if processing_id:
+        pipe.set(prep_key, processing_id, ex=ttl)
+    if pending_ids:
+        pipe.zadd(queue_key, {uid: score for uid, score in pending_ids})
+        pipe.expire(queue_key, ttl)
+
+    await pipe.execute()
 
 async def initialize_redis_sets_only_12_oclock(r, bakery_id: int):
     await reset_timeout(r, bakery_id)
@@ -1069,7 +1145,7 @@ async def calculate_ready_status(
         # Calculate average prep time for this customer's bread types
         breads_cook_time = [
             time_per_bread[bread_type]
-            for bread_type, count in current_user_detail.items()
+            for bread_type, count in effective_user_detail.items()
             if count > 0
         ]
         this_customer_average_cook_time = sum(breads_cook_time) // len(breads_cook_time)
@@ -1115,6 +1191,66 @@ async def create_urgent_item(r, bakery_id: int, ticket_id: int | None, bread_req
     pipe.expire(queue_key, ttl)
     await pipe.execute()
     return urgent_id
+
+
+async def start_next_urgent_for_ticket_if_available(r, bakery_id: int, ticket_id: int):
+    """Start (set PROCESSING) the next PENDING urgent item for a specific ticket.
+
+    This is used to ensure urgent breads never preempt a different ticket while
+    still allowing a ticket to continue with its own urgent breads after its base
+    breads are finished.
+    """
+    queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
+    prep_key = REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+    ttl = seconds_until_midnight_iran()
+
+    existing = await r.get(prep_key)
+    if existing:
+        item_key = get_urgent_item_key(bakery_id, str(existing))
+        existing_tid = await r.hget(item_key, "ticket_id")
+        try:
+            if existing_tid is not None and int(existing_tid) == int(ticket_id):
+                return str(existing)
+        except Exception:
+            return None
+        return None
+
+    urgent_ids = await r.zrange(queue_key, 0, -1)
+    if not urgent_ids:
+        return None
+
+    pipe = r.pipeline()
+    for uid in urgent_ids:
+        item_key = get_urgent_item_key(bakery_id, str(uid))
+        pipe.hget(item_key, "status")
+        pipe.hget(item_key, "ticket_id")
+    raw = await pipe.execute()
+
+    chosen_id = None
+    for idx, uid in enumerate(urgent_ids):
+        status = raw[idx * 2]
+        tid = raw[idx * 2 + 1]
+        if status != "PENDING":
+            continue
+        try:
+            if tid is None or int(tid) != int(ticket_id):
+                continue
+        except Exception:
+            continue
+        chosen_id = str(uid)
+        break
+
+    if not chosen_id:
+        return None
+
+    item_key = get_urgent_item_key(bakery_id, chosen_id)
+    pipe2 = r.pipeline(transaction=True)
+    pipe2.zrem(queue_key, chosen_id)
+    pipe2.set(prep_key, chosen_id, ex=ttl)
+    pipe2.hset(item_key, "status", "PROCESSING")
+    pipe2.expire(item_key, ttl)
+    await pipe2.execute()
+    return chosen_id
 
 
 async def get_urgent_item(r, bakery_id: int, urgent_id: str):
@@ -1178,6 +1314,79 @@ async def list_urgent_items(r, bakery_id: int):
         items.append({"urgent_id": str(uid), **row})
 
     return {"processing": processing_id, "items": items}
+
+
+async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -> dict[int, dict[str, int]]:
+    """Return ticket_id -> {bread_id(str): urgent_count} for all active urgent items.
+
+    Uses urgent items' `original_breads` so the injected quantity remains stable
+    during baking (similar to how normal ticket breads are shown).
+
+    Includes only PENDING/PROCESSING items.
+    """
+    if not time_per_bread:
+        return {}
+
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode()
+            except Exception:
+                return None
+        return str(v)
+
+    bread_ids_sorted = sorted(time_per_bread.keys())
+    queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
+    prep_key = REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+
+    urgent_ids = await r.zrange(queue_key, 0, -1)
+    processing_raw = await r.get(prep_key)
+
+    ids = list(urgent_ids or [])
+    if processing_raw:
+        pid = _as_text(processing_raw)
+        if pid and pid not in ids:
+            ids.append(pid)
+
+    if not ids:
+        return {}
+
+    pipe = r.pipeline()
+    for uid in ids:
+        item_key = get_urgent_item_key(bakery_id, str(_as_text(uid)))
+        pipe.hget(item_key, "ticket_id")
+        pipe.hget(item_key, "original_breads")
+        pipe.hget(item_key, "status")
+    rows = await pipe.execute()
+
+    out: dict[int, dict[str, int]] = {}
+    for i in range(0, len(rows), 3):
+        ticket_id_raw, original_raw, status_raw = rows[i], rows[i + 1], rows[i + 2]
+        status = _as_text(status_raw)
+        if status not in ("PENDING", "PROCESSING"):
+            continue
+
+        ticket_id_txt = _as_text(ticket_id_raw)
+        if not ticket_id_txt:
+            continue
+        try:
+            tid = int(ticket_id_txt)
+        except Exception:
+            continue
+
+        counts = _decode_counts(_as_text(original_raw) or "")
+        if len(counts) < len(bread_ids_sorted):
+            counts = counts + [0] * (len(bread_ids_sorted) - len(counts))
+
+        for bid, c in zip(bread_ids_sorted, counts[: len(bread_ids_sorted)]):
+            if int(c) <= 0:
+                continue
+            m = out.setdefault(int(tid), {})
+            m[str(bid)] = int(m.get(str(bid), 0)) + int(c)
+
+    return out
 
 
 async def update_urgent_item_if_pending(r, bakery_id: int, urgent_id: str, bread_requirements: dict, time_per_bread: dict) -> bool:

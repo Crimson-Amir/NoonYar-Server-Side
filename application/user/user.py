@@ -137,16 +137,29 @@ async def queue_check(
         reservation_dict
     ) // 2 * average_bread_time
 
+    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, {str(k): int(v) for k, v in bread_time.items()})
+    urgent_breads = urgent_by_ticket.get(int(t), {})
+
     user_breads_persian = user_breads = None
     if is_user_exist:
 
+        calc_counts = reservation_dict[reservation_number]
+        calc_user_breads = {bid: count for bid, count in zip(bread_ids_sorted, calc_counts)}
+
+        display_counts = calc_counts
+        if display_counts and all(int(x) == 0 for x in display_counts):
+            with SessionLocal() as db:
+                breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, [reservation_number])
+            bread_counts = breads_map_db.get(reservation_number, {})
+            display_counts = [int(bread_counts.get(int(bid), 0)) for bid in bread_ids_sorted]
+
         user_breads_persian = {
             bread_names.get(bid, str(bid)): count
-            for bid, count in zip(bread_ids_sorted, reservation_dict[reservation_number])
+            for bid, count in zip(bread_ids_sorted, display_counts)
         }
         user_breads = {
             bid: count
-            for bid, count in zip(bread_ids_sorted, reservation_dict[reservation_number])
+            for bid, count in zip(bread_ids_sorted, calc_counts)
         }
 
     ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
@@ -161,6 +174,7 @@ async def queue_check(
         "empty_slot_time_avg": empty_slot_time,
         "in_queue_customers_time": in_queue_customers_time,
         "user_breads": user_breads_persian,
+        "urgent_breads": urgent_breads,
         "current_ticket_id": current_ticket_id,
         "ticket_id": t,
         "customer_id": customer_id,
@@ -277,6 +291,7 @@ async def queue_all_ticket_summary(
     name_key = redis_helper.REDIS_KEY_BREAD_NAMES
     wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
     served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
@@ -284,7 +299,8 @@ async def queue_all_ticket_summary(
     pipe.hgetall(name_key)
     pipe.hgetall(wait_list_key)
     pipe.smembers(served_key)
-    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_map, served_set = await pipe.execute()
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')
+    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_map, served_set, all_breads = await pipe.execute()
 
     if not time_per_bread_raw:
         return {'msg': 'bakery does not exist or does not have any bread'}
@@ -314,23 +330,77 @@ async def queue_all_ticket_summary(
         token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
         breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
 
+    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, {str(k): int(v) for k, v in time_per_bread_raw.items()})
+
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode()
+            except Exception:
+                return None
+        return str(v)
+
+    breads_per_customer = {}
+    for bread_value in all_breads or []:
+        bread_value = _as_text(bread_value)
+        if not bread_value or ':' not in bread_value:
+            continue
+        try:
+            _, cid_str = bread_value.split(':', 1)
+            cid = int(cid_str)
+        except Exception:
+            continue
+        breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
+
     result = {}
     for ticket_id in all_ticket_ids:
+        counts = reservation_dict.get(ticket_id) or wait_list_dict.get(ticket_id)
+        breads_by_name = {}
+
+        urgent_breads = urgent_by_ticket.get(int(ticket_id), {})
+
+        base_needed_total = 0
+        if counts is not None:
+            if counts and all(int(x) == 0 for x in counts):
+                bread_counts = breads_map_db.get(ticket_id, {})
+                base_needed_total = sum(int(v) for v in bread_counts.values())
+            else:
+                base_needed_total = sum(int(x) for x in counts)
+        else:
+            bread_counts = breads_map_db.get(ticket_id, {})
+            base_needed_total = sum(int(v) for v in bread_counts.values())
+
+        urgent_needed_total = 0
+        if urgent_breads:
+            urgent_needed_total = sum(int(v) for v in urgent_breads.values())
+
+        needed_total = int(base_needed_total) + int(urgent_needed_total)
+
+        baked_total = int(breads_per_customer.get(int(ticket_id), 0))
+
         if ticket_id in served_ids:
             status = "TICKET_IS_SERVED"
+        elif baked_total >= max(int(needed_total), 0) and int(needed_total) > 0:
+            status = "ALL_BREADS_PREPARED"
+        elif baked_total >= 1:
+            status = "CURRENTLY_WORKING"
         elif ticket_id in wait_list_ids:
             status = "TICKET_IS_IN_WAIT_LIST"
         else:
             status = "IN_QUEUE"
 
-        counts = reservation_dict.get(ticket_id) or wait_list_dict.get(ticket_id)
-        breads_by_name = {}
-
         if counts is not None:
             if len(counts) != len(bread_ids_sorted):
                 raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
 
-            for bid, count in zip(bread_ids_sorted, counts):
+            display_counts = counts
+            if display_counts and all(int(x) == 0 for x in display_counts):
+                bread_counts = breads_map_db.get(ticket_id, {})
+                display_counts = [int(bread_counts.get(int(bid), 0)) for bid in bread_ids_sorted]
+
+            for bid, count in zip(bread_ids_sorted, display_counts):
                 if int(count) <= 0:
                     continue
                 breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
@@ -345,6 +415,7 @@ async def queue_all_ticket_summary(
         result[str(ticket_id)] = {
             "token": token_map.get(ticket_id),
             "breads": breads_by_name,
+            "urgent_breads": urgent_breads,
             "status": status,
         }
 

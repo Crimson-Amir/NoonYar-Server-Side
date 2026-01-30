@@ -1,4 +1,5 @@
 import functools, requests
+import json
 from application import crud
 from celery import Celery
 from datetime import datetime
@@ -229,11 +230,112 @@ def save_bread_to_db(self, ticket_id, bakery_id, baked_at_timestamp):
     with session_scope() as db:
         customer_id = None
         consumed = True
-        if ticket_id != 0:
-            customer = crud.get_customer_by_ticket_id(db, ticket_id, bakery_id)
+        if ticket_id is not None and ticket_id != 0:
+            customer = crud.get_customer_by_ticket_id(db, int(ticket_id), int(bakery_id))
             if customer:
                 consumed = False
                 customer_id = customer.id
 
         baked_at = datetime.fromtimestamp(baked_at_timestamp, tz=UTC)
         crud.create_bread(db, bakery_id, customer_id, baked_at, consumed)
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def log_urgent_inject(self, bakery_id: int, urgent_id: str, ticket_id: int | None, bread_requirements: dict):
+    with session_scope() as db:
+        bread_map = {str(k): int(v) for k, v in (bread_requirements or {}).items()}
+        crud.create_urgent_bread_log(
+            db,
+            bakery_id=int(bakery_id),
+            urgent_id=str(urgent_id),
+            ticket_id=int(ticket_id) if ticket_id is not None else None,
+            status="PENDING",
+            original_breads=bread_map,
+            remaining_breads=bread_map,
+        )
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def log_urgent_edit(self, bakery_id: int, urgent_id: str, bread_requirements: dict):
+    with session_scope() as db:
+        bread_map = {str(k): int(v) for k, v in (bread_requirements or {}).items()}
+        ok = crud.update_urgent_bread_log(
+            db,
+            bakery_id=int(bakery_id),
+            urgent_id=str(urgent_id),
+            status="PENDING",
+            original_breads=bread_map,
+            remaining_breads=bread_map,
+        )
+        if not ok:
+            crud.create_urgent_bread_log(
+                db,
+                bakery_id=int(bakery_id),
+                urgent_id=str(urgent_id),
+                ticket_id=None,
+                status="PENDING",
+                original_breads=bread_map,
+                remaining_breads=bread_map,
+            )
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def log_urgent_cancel(self, bakery_id: int, urgent_id: str):
+    with session_scope() as db:
+        ok = crud.update_urgent_bread_log(
+            db,
+            bakery_id=int(bakery_id),
+            urgent_id=str(urgent_id),
+            status="CANCELLED",
+            cancelled=True,
+        )
+        if not ok:
+            crud.create_urgent_bread_log(
+                db,
+                bakery_id=int(bakery_id),
+                urgent_id=str(urgent_id),
+                ticket_id=None,
+                status="CANCELLED",
+                original_breads={},
+                remaining_breads={},
+            )
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def log_urgent_processing(self, bakery_id: int, urgent_id: str):
+    with session_scope() as db:
+        ok = crud.update_urgent_bread_log(
+            db,
+            bakery_id=int(bakery_id),
+            urgent_id=str(urgent_id),
+            status="PROCESSING",
+        )
+        if not ok:
+            crud.create_urgent_bread_log(
+                db,
+                bakery_id=int(bakery_id),
+                urgent_id=str(urgent_id),
+                ticket_id=None,
+                status="PROCESSING",
+                original_breads={},
+                remaining_breads={},
+            )
+
+
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
+@handle_task_errors
+def log_urgent_remaining(self, bakery_id: int, urgent_id: str, remaining_breads: dict | None, done: bool = False):
+    with session_scope() as db:
+        remaining_map = {str(k): int(v) for k, v in (remaining_breads or {}).items()}
+        crud.update_urgent_bread_log(
+            db,
+            bakery_id=int(bakery_id),
+            urgent_id=str(urgent_id),
+            status="DONE" if done else "PROCESSING",
+            remaining_breads=remaining_map,
+            done=bool(done),
+        )

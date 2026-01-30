@@ -48,6 +48,7 @@ class Bakery(Base):
     customers = relationship("Customer", back_populates="bakery", cascade="all, delete-orphan")
     breads_associations = relationship("Bread", back_populates="bakery", cascade="all, delete-orphan")
     queue_state_snapshots = relationship("QueueStateSnapshot", back_populates="bakery", cascade="all, delete-orphan")
+    urgent_bread_log_associations = relationship("UrgentBreadLog", back_populates="bakery", cascade="all, delete-orphan")
 
 
 class BreadType(Base):
@@ -176,6 +177,24 @@ class QueueStateSnapshot(Base):
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
 
     bakery = relationship("Bakery", back_populates="queue_state_snapshots")
+
+
+class UrgentBreadLog(Base):
+    __tablename__ = 'urgent_bread_log'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    urgent_id = Column(String(64), nullable=False, unique=True, index=True)
+    bakery_id = Column(Integer, ForeignKey('bakery.bakery_id', ondelete='CASCADE'), nullable=False)
+    ticket_id = Column(Integer, nullable=True)
+    status = Column(String(32), nullable=False)
+    original_breads_json = Column(Unicode, nullable=False)
+    remaining_breads_json = Column(Unicode, nullable=False)
+    register_date = Column(DateTime, default=lambda: datetime.now(UTC))
+    update_date = Column(DateTime, default=lambda: datetime.now(UTC))
+    done_date = Column(DateTime, nullable=True)
+    cancel_date = Column(DateTime, nullable=True)
+
+    bakery = relationship("Bakery", back_populates="urgent_bread_log_associations")
 
 
 # class OTP(Base):

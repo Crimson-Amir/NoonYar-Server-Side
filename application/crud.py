@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import update, case, select
+from sqlalchemy import update, case, select, func
 from application import models, schemas
 from application.auth import hash_password_md5
 import pytz
@@ -672,6 +672,70 @@ def get_today_breads(db, bakery_id: int):
     ).all()
 
 
+def get_today_total_baked_breads(db: Session, bakery_id: int) -> int:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    total = (
+        db.query(func.count(models.Bread.id))
+        .filter(models.Bread.bakery_id == int(bakery_id))
+        .filter(models.Bread.enter_date >= midnight_utc)
+        .scalar()
+    )
+    return int(total or 0)
+
+
+def get_today_total_required_breads(db: Session, bakery_id: int) -> int:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    total = (
+        db.query(func.sum(models.CustomerBread.count))
+        .join(models.Customer, models.Customer.id == models.CustomerBread.customer_id)
+        .filter(models.Customer.bakery_id == int(bakery_id))
+        .filter(models.Customer.register_date >= midnight_utc)
+        .scalar()
+    )
+    return int(total or 0)
+
+
+def get_today_total_required_urgent_breads(db: Session, bakery_id: int) -> int:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    rows = (
+        db.query(models.UrgentBreadLog.original_breads_json, models.UrgentBreadLog.status)
+        .filter(models.UrgentBreadLog.bakery_id == int(bakery_id))
+        .filter(models.UrgentBreadLog.register_date >= midnight_utc)
+        .all()
+    )
+
+    total = 0
+    for original_json, status in rows:
+        if str(status) == "CANCELLED":
+            continue
+        if not original_json:
+            continue
+        try:
+            m = json.loads(original_json)
+        except Exception:
+            continue
+        if isinstance(m, dict):
+            for v in m.values():
+                try:
+                    total += int(v)
+                except Exception:
+                    continue
+
+    return int(total)
+
+
 def consume_breads_for_customer_today(db: Session, bakery_id: int, ticket_id: int) -> int:
     tehran = pytz.timezone("Asia/Tehran")
     now_tehran = datetime.now(tehran)
@@ -700,3 +764,80 @@ def consume_breads_for_customer_today(db: Session, bakery_id: int, ticket_id: in
     result = db.execute(stmt).scalars().all()
     db.commit()
     return len(result)
+
+
+def create_urgent_bread_log(
+    db: Session,
+    bakery_id: int,
+    urgent_id: str,
+    ticket_id: int | None,
+    status: str,
+    original_breads: dict,
+    remaining_breads: dict,
+):
+    obj = models.UrgentBreadLog(
+        bakery_id=int(bakery_id),
+        urgent_id=str(urgent_id),
+        ticket_id=int(ticket_id) if ticket_id is not None else None,
+        status=str(status),
+        original_breads_json=json.dumps(original_breads, ensure_ascii=False),
+        remaining_breads_json=json.dumps(remaining_breads, ensure_ascii=False),
+        update_date=datetime.now(pytz.UTC),
+    )
+    db.add(obj)
+    db.commit()
+    return obj.id
+
+
+def update_urgent_bread_log(
+    db: Session,
+    bakery_id: int,
+    urgent_id: str,
+    status: str | None = None,
+    original_breads: dict | None = None,
+    remaining_breads: dict | None = None,
+    done: bool = False,
+    cancelled: bool = False,
+):
+    row = (
+        db.query(models.UrgentBreadLog)
+        .filter(models.UrgentBreadLog.bakery_id == int(bakery_id))
+        .filter(models.UrgentBreadLog.urgent_id == str(urgent_id))
+        .first()
+    )
+    if not row:
+        return False
+
+    if status is not None:
+        row.status = str(status)
+    if original_breads is not None:
+        row.original_breads_json = json.dumps(original_breads, ensure_ascii=False)
+    if remaining_breads is not None:
+        row.remaining_breads_json = json.dumps(remaining_breads, ensure_ascii=False)
+
+    now = datetime.now(pytz.UTC)
+    row.update_date = now
+    if done:
+        row.done_date = now
+    if cancelled:
+        row.cancel_date = now
+
+    db.commit()
+    return True
+
+
+def get_today_urgent_bread_logs(db: Session, bakery_id: int, statuses: list[str] | None = None):
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    q = (
+        db.query(models.UrgentBreadLog)
+        .filter(models.UrgentBreadLog.bakery_id == int(bakery_id))
+        .filter(models.UrgentBreadLog.register_date >= midnight_utc)
+        .order_by(models.UrgentBreadLog.id.asc())
+    )
+    if statuses:
+        q = q.filter(models.UrgentBreadLog.status.in_(list(statuses)))
+    return q.all()

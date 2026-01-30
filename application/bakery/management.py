@@ -3,8 +3,12 @@ from application.logger_config import logger
 from sqlalchemy.orm import Session
 from application.helpers.general_helpers import seconds_until_midnight_iran
 from application.helpers import database_helper, endpoint_helper, redis_helper
-from application import mqtt_client, crud, schemas
+from application import mqtt_client, crud, schemas, tasks
+from application import models
 from sqlalchemy.exc import IntegrityError
+import json
+from datetime import datetime, time
+import pytz
 
 FILE_NAME = "bakery:management"
 handle_errors = endpoint_helper.db_transaction(FILE_NAME)
@@ -73,10 +77,13 @@ async def urgent_inject(
         served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
         ttl = seconds_until_midnight_iran()
 
+        in_queue = await r.hexists(res_key, str(ticket_id))
+
         pipe = r.pipeline(transaction=True)
         pipe.srem(served_key, int(ticket_id))
         pipe.hdel(wait_list_key, str(ticket_id))
-        pipe.hset(res_key, str(ticket_id), encoded_reservation)
+        if not in_queue:
+            pipe.hset(res_key, str(ticket_id), encoded_reservation)
         pipe.zadd(order_key, {str(ticket_id): int(ticket_id)})
         pipe.expire(res_key, ttl)
         pipe.expire(order_key, ttl)
@@ -92,6 +99,8 @@ async def urgent_inject(
         bread_requirements,
         time_per_bread=time_per_bread,
     )
+
+    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_id, bread_requirements)
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 
@@ -138,6 +147,8 @@ async def urgent_edit(
     if not ok:
         raise HTTPException(status_code=400, detail={"error": "Urgent item cannot be edited (not found or not pending)"})
 
+    tasks.log_urgent_edit.delay(bakery_id, urgent_id, bread_requirements)
+
     logger.info(f"{FILE_NAME}:urgent_edit", extra={
         "bakery_id": bakery_id,
         "urgent_id": urgent_id,
@@ -163,6 +174,8 @@ async def urgent_delete(
     if not ok:
         raise HTTPException(status_code=400, detail={"error": "Urgent item cannot be deleted (not found or not pending)"})
 
+    tasks.log_urgent_cancel.delay(bakery_id, urgent_id)
+
     logger.info(f"{FILE_NAME}:urgent_delete", extra={
         "bakery_id": bakery_id,
         "urgent_id": urgent_id,
@@ -182,6 +195,103 @@ async def urgent_list(
     bakery_id = int(bakery_id)
     r = request.app.state.redis
     items = await redis_helper.list_urgent_items(r, bakery_id)
+    return {"items": items}
+
+
+@router.post('/reset_today')
+@handle_errors
+async def reset_today(
+        request: Request,
+        payload: schemas.BakeryID,
+        confirm: bool = False,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin),
+):
+    if not confirm:
+        raise HTTPException(status_code=400, detail={"error": "confirmation_required"})
+
+    bakery_id = int(payload.bakery_id)
+
+    tehran = pytz.timezone('Asia/Tehran')
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    breads_deleted = (
+        db.query(models.Bread)
+        .filter(models.Bread.bakery_id == bakery_id, models.Bread.enter_date >= midnight_utc)
+        .delete(synchronize_session=False)
+    )
+
+    urgent_deleted = (
+        db.query(models.UrgentBreadLog)
+        .filter(models.UrgentBreadLog.bakery_id == bakery_id, models.UrgentBreadLog.register_date >= midnight_utc)
+        .delete(synchronize_session=False)
+    )
+
+    snapshots_deleted = (
+        db.query(models.QueueStateSnapshot)
+        .filter(models.QueueStateSnapshot.bakery_id == bakery_id, models.QueueStateSnapshot.register_date >= midnight_utc)
+        .delete(synchronize_session=False)
+    )
+
+    customers_deleted = (
+        db.query(models.Customer)
+        .filter(models.Customer.bakery_id == bakery_id, models.Customer.register_date >= midnight_utc)
+        .delete(synchronize_session=False)
+    )
+
+    crud.update_all_customers_status_to_false(db, bakery_id)
+
+    r = request.app.state.redis
+    await redis_helper.purge_bakery_data(r, bakery_id)
+    await redis_helper.initialize_redis_sets(r, bakery_id)
+    await redis_helper.initialize_redis_sets_only_12_oclock(r, bakery_id)
+
+    await mqtt_client.update_has_customer_in_queue(request, bakery_id, False)
+    await mqtt_client.update_has_upcoming_customer_in_queue(request, bakery_id, False)
+
+    logger.info(f"{FILE_NAME}:reset_today", extra={
+        "bakery_id": bakery_id,
+        "customers_deleted": int(customers_deleted or 0),
+        "breads_deleted": int(breads_deleted or 0),
+        "urgent_deleted": int(urgent_deleted or 0),
+        "snapshots_deleted": int(snapshots_deleted or 0),
+    })
+
+    return {
+        "status": "OK",
+        "customers_deleted": int(customers_deleted or 0),
+        "breads_deleted": int(breads_deleted or 0),
+        "urgent_deleted": int(urgent_deleted or 0),
+        "snapshots_deleted": int(snapshots_deleted or 0),
+    }
+
+
+@router.get('/urgent/history/{bakery_id}')
+@handle_errors
+async def urgent_history(
+        bakery_id: int,
+        request: Request,
+        db: Session = Depends(endpoint_helper.get_db),
+        _: int = Depends(require_admin),
+):
+    bakery_id = int(bakery_id)
+    rows = crud.get_today_urgent_bread_logs(db, bakery_id)
+    items = []
+    for row in rows:
+        items.append({
+            "urgent_id": row.urgent_id,
+            "bakery_id": int(row.bakery_id),
+            "ticket_id": int(row.ticket_id) if row.ticket_id is not None else None,
+            "status": row.status,
+            "original_breads": json.loads(row.original_breads_json) if row.original_breads_json else {},
+            "remaining_breads": json.loads(row.remaining_breads_json) if row.remaining_breads_json else {},
+            "register_date": row.register_date.isoformat() if row.register_date else None,
+            "update_date": row.update_date.isoformat() if row.update_date else None,
+            "done_date": row.done_date.isoformat() if row.done_date else None,
+            "cancel_date": row.cancel_date.isoformat() if row.cancel_date else None,
+        })
     return {"items": items}
 
 
@@ -263,16 +373,114 @@ async def modify_ticket(
     if not (in_queue or in_wait_list):
         raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
 
+    if bool(in_wait_list):
+        raise HTTPException(status_code=400, detail={"error": "Ticket is in wait list and cannot be modified"})
+
+    prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
+    order_ids = []
+    reservations_map = {}
+    prep_state_str = None
+
+    pipe_work = r.pipeline()
+    pipe_work.get(prep_state_key)
+    pipe_work.hgetall(res_key)
+    pipe_work.zrange(order_key, 0, -1)
+    prep_state_raw, reservations_map, order_ids = await pipe_work.execute()
+
+    if isinstance(prep_state_raw, bytes):
+        try:
+            prep_state_str = prep_state_raw.decode()
+        except Exception:
+            prep_state_str = None
+    elif prep_state_raw is not None:
+        prep_state_str = str(prep_state_raw)
+
+    if not reservations_map or not order_ids:
+        await redis_helper.get_bakery_reservations(
+            r,
+            bakery_id,
+            fetch_from_redis_first=False,
+            bakery_time_per_bread=time_per_bread,
+        )
+        pipe_work_retry = r.pipeline()
+        pipe_work_retry.get(prep_state_key)
+        pipe_work_retry.hgetall(res_key)
+        pipe_work_retry.zrange(order_key, 0, -1)
+        prep_state_raw, reservations_map, order_ids = await pipe_work_retry.execute()
+        if isinstance(prep_state_raw, bytes):
+            try:
+                prep_state_str = prep_state_raw.decode()
+            except Exception:
+                prep_state_str = None
+        elif prep_state_raw is not None:
+            prep_state_str = str(prep_state_raw)
+
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            return v.decode()
+        return str(v)
+
+    order_ids = [int(_as_text(x)) for x in order_ids] if order_ids else []
+    reservations_map = {_as_text(k): _as_text(v) for k, v in (reservations_map or {}).items()}
+
+    breads_per_customer = {}
+    for bread_value in all_breads:
+        bread_value = _as_text(bread_value)
+        if bread_value and ':' in bread_value:
+            try:
+                cid = int(bread_value.split(':')[1])
+            except Exception:
+                continue
+            breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
+
+    def _get_customer_needs(ticket_id: int):
+        if not ticket_id or str(ticket_id) not in reservations_map:
+            return 0
+        try:
+            counts = list(map(int, reservations_map[str(ticket_id)].split(',')))
+        except Exception:
+            return 0
+        return sum(counts)
+
+    def _get_queue_working_customer():
+        if prep_state_str and order_ids:
+            try:
+                state_customer_id, _ = map(int, str(prep_state_str).split(':'))
+            except Exception:
+                state_customer_id = None
+            if state_customer_id and state_customer_id in order_ids and str(state_customer_id) in reservations_map:
+                needed = _get_customer_needs(state_customer_id)
+                already_made = breads_per_customer.get(state_customer_id, 0)
+                if already_made < needed:
+                    return state_customer_id
+
+        for cid in order_ids:
+            if str(cid) not in reservations_map:
+                continue
+            needed = _get_customer_needs(cid)
+            already_made = breads_per_customer.get(cid, 0)
+            if already_made < needed:
+                return cid
+        return None
+
+    working_customer_id = _get_queue_working_customer()
+    if working_customer_id is not None and int(working_customer_id) == int(customer_ticket_id):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Ticket is currently being prepared and cannot be modified",
+                "customer_ticket_id": int(customer_ticket_id),
+            },
+        )
+
     ttl = seconds_until_midnight_iran()
     pipe = r.pipeline()
-    if in_queue:
-        pipe.hset(res_key, str(customer_ticket_id), encoded_reservation)
-        pipe.zadd(order_key, {str(customer_ticket_id): int(customer_ticket_id)})
-        pipe.expire(res_key, ttl)
-        pipe.expire(order_key, ttl)
-    else:
-        pipe.hset(wait_list_key, str(customer_ticket_id), encoded_reservation)
-        pipe.expire(wait_list_key, ttl)
+    pipe.hset(res_key, str(customer_ticket_id), encoded_reservation)
+    pipe.zadd(order_key, {str(customer_ticket_id): int(customer_ticket_id)})
+    pipe.expire(res_key, ttl)
+    pipe.expire(order_key, ttl)
     await pipe.execute()
 
     upcoming_breads = await redis_helper.get_bakery_upcoming_breads(r, bakery_id)
@@ -303,7 +511,7 @@ async def modify_ticket(
     return {
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
-        "location": "queue" if in_queue else "wait_list",
+        "location": "queue",
     }
 
 
@@ -438,86 +646,19 @@ async def bread_progress(
         _: int = Depends(require_admin),
 ):
     bakery_id = int(bakery_id)
-    r = request.app.state.redis
+    should_cook_total = crud.get_today_total_required_breads(db, bakery_id)
+    should_cook_total += crud.get_today_total_required_urgent_breads(db, bakery_id)
 
-    prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
-    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
-    time_key = redis_helper.REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
-    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    cooked_total = crud.get_today_total_baked_breads(db, bakery_id)
 
-    pipe = r.pipeline()
-    pipe.get(prep_state_key)
-    pipe.hgetall(time_key)
-    pipe.hgetall(res_key)
-    pipe.zrange(order_key, 0, -1)
-    pipe.zrangebyscore(breads_key, '-inf', '+inf')
-    prep_state_str, time_per_bread, reservations_map, order_ids, all_breads = await pipe.execute()
-
-    if not time_per_bread:
-        raise HTTPException(status_code=404, detail={"error": "this bakery does not have any bread"})
-
-    order_ids = [int(x) for x in order_ids] if order_ids else []
-    reservation_dict = {
-        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
-    } if reservations_map else {}
-
-    should_cook_total = 0
-    for tid in order_ids:
-        counts = reservation_dict.get(int(tid))
-        if counts:
-            should_cook_total += sum(counts)
-
-    breads_per_customer = {}
-    cooked_total = 0
-    for bread_value in all_breads or []:
-        if isinstance(bread_value, bytes):
-            try:
-                bread_value = bread_value.decode()
-            except Exception:
-                continue
-        if isinstance(bread_value, str) and ':' in bread_value:
-            try:
-                _, cid_str = bread_value.split(':', 1)
-                cid = int(cid_str)
-            except (ValueError, TypeError):
-                continue
-            breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
-            cooked_total += 1
-
-    remaining_total = should_cook_total - cooked_total
+    remaining_total = int(should_cook_total) - int(cooked_total)
     if remaining_total < 0:
         remaining_total = 0
 
-    current_customer_id = None
-    current_customer_needed = None
-    current_customer_made = None
-
-    if prep_state_str and order_ids:
-        if isinstance(prep_state_str, bytes):
-            try:
-                prep_state_str = prep_state_str.decode()
-            except Exception:
-                prep_state_str = None
-        if prep_state_str:
-            try:
-                state_customer_id, _ = map(int, str(prep_state_str).split(':'))
-            except ValueError:
-                state_customer_id = None
-
-            if state_customer_id and state_customer_id in order_ids:
-                current_customer_id = state_customer_id
-                counts = reservation_dict.get(int(state_customer_id))
-                current_customer_needed = sum(counts) if counts else 0
-                current_customer_made = breads_per_customer.get(int(state_customer_id), 0)
-
     return {
-        "should_cook": should_cook_total,
-        "already_cooked": cooked_total,
+        "should_cook": int(should_cook_total),
+        "already_cooked": int(cooked_total),
         "remaining": remaining_total,
-        "current_customer_id": current_customer_id,
-        "current_customer_needed": current_customer_needed,
-        "current_customer_made": current_customer_made,
     }
 
 @router.post('/new_bakery', response_model=schemas.AddBakeryResult)

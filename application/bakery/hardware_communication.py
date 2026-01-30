@@ -150,7 +150,16 @@ async def serve_ticket(
     if len(customer_reservations) != len(bread_ids):
         raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
 
+    if customer_reservations and all(int(x) == 0 for x in customer_reservations):
+        with SessionLocal() as db:
+            breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, [int(customer_id)])
+        bread_counts = breads_map_db.get(int(customer_id), {})
+        customer_reservations = [int(bread_counts.get(int(bid), 0)) for bid in bread_ids]
+
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
+
+    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
+    urgent_breads = urgent_by_ticket.get(int(customer_id), {})
 
     logger.info(f"{FILE_NAME}:serve_ticket", extra={
         "bakery_id": bakery_id,
@@ -162,6 +171,7 @@ async def serve_ticket(
 
     return {
         "user_detail": user_detail,
+        "urgent_breads": urgent_breads,
     }
 
 
@@ -213,7 +223,16 @@ async def serve_ticket_by_token(
     if len(customer_reservations) != len(bread_ids):
         raise HTTPException(status_code=404, detail="Reservation length mismatch with time_per_bread")
 
+    if customer_reservations and all(int(x) == 0 for x in customer_reservations):
+        with SessionLocal() as db:
+            breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, [int(customer_id)])
+        bread_counts = breads_map_db.get(int(customer_id), {})
+        customer_reservations = [int(bread_counts.get(int(bid), 0)) for bid in bread_ids]
+
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
+
+    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
+    urgent_breads = urgent_by_ticket.get(int(customer_id), {})
 
     logger.info(f"{FILE_NAME}:serve_ticket_by_token", extra={
         "bakery_id": bakery_id,
@@ -235,6 +254,7 @@ async def serve_ticket_by_token(
 
     return {
         "user_detail": user_detail,
+        "urgent_breads": urgent_breads,
     }
 
 
@@ -277,10 +297,23 @@ async def current_ticket(
     reservation_keys = sorted(reservation_dict.keys())
     bread_ids_sorted = sorted(time_per_bread.keys())
 
-    user_breads = {bid: count for bid, count in zip(bread_ids_sorted, reservation_dict[current_ticket_id])}
+    calc_counts = reservation_dict[current_ticket_id]
+    calc_user_breads = {bid: count for bid, count in zip(bread_ids_sorted, calc_counts)}
+
+    display_counts = calc_counts
+    if display_counts and all(int(x) == 0 for x in display_counts):
+        with SessionLocal() as db:
+            breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, [current_ticket_id])
+        bread_counts = breads_map_db.get(current_ticket_id, {})
+        display_counts = [int(bread_counts.get(int(bid), 0)) for bid in bread_ids_sorted]
+
+    display_user_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, display_counts)}
+
+    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
+    urgent_breads = urgent_by_ticket.get(int(current_ticket_id), {})
 
     ready, _, wait_until = await redis_helper.calculate_ready_status(
-        r, bakery_id, user_breads, time_per_bread, reservation_keys, current_ticket_id, reservation_dict
+        r, bakery_id, calc_user_breads, time_per_bread, reservation_keys, current_ticket_id, reservation_dict
     )
 
     return {
@@ -288,7 +321,8 @@ async def current_ticket(
         "wait_until": wait_until,
         "has_customer_in_queue": True,
         "current_ticket_id": current_ticket_id,
-        "current_user_detail": user_breads
+        "current_user_detail": display_user_breads,
+        "urgent_breads": urgent_breads,
     }
 
 
@@ -449,37 +483,6 @@ async def current_cook_customer(
     time_per_bread = {_as_text(k): int(v) for k, v in time_per_bread.items()} if time_per_bread else {}
     bread_ids_sorted = sorted(time_per_bread.keys())
 
-    urgent_id = None
-    if urgent_processing_raw:
-        urgent_id = _as_text(urgent_processing_raw)
-    elif urgent_next_raw:
-        urgent_id = _as_text(urgent_next_raw[0])
-
-    if urgent_id and time_per_bread:
-        urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, urgent_id)
-        pipe_u = r.pipeline()
-        pipe_u.hget(urgent_item_key, "ticket_id")
-        pipe_u.hget(urgent_item_key, "remaining_breads")
-        ticket_id_raw, remaining_raw = await pipe_u.execute()
-
-        remaining_counts = []
-        if remaining_raw:
-            remaining_counts = [int(x) for x in _as_text(remaining_raw).split(",") if str(x) != ""]
-        if len(remaining_counts) < len(bread_ids_sorted):
-            remaining_counts = remaining_counts + [0] * (len(bread_ids_sorted) - len(remaining_counts))
-
-        remaining_total = sum(int(x) for x in remaining_counts[: len(bread_ids_sorted)])
-        if remaining_total > 0:
-            urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, remaining_counts)}
-            ticket_id = int(ticket_id_raw) if ticket_id_raw else -1
-            return {
-                "customer_id": ticket_id,
-                "customer_breads": urgent_breads,
-                "next_customer": False,
-                "urgent": True,
-                "urgent_id": urgent_id,
-            }
-
     # Count breads already made per customer
     breads_per_customer = {}
     for bread_value in all_breads:
@@ -490,6 +493,62 @@ async def current_cook_customer(
             except ValueError:
                 continue
             breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
+
+    urgent_id = None
+    if urgent_processing_raw:
+        urgent_id = _as_text(urgent_processing_raw)
+    elif urgent_next_raw:
+        urgent_id = _as_text(urgent_next_raw[0])
+
+    # Determine active ticket based on prep_state (non-preemptive urgent behavior)
+    state_customer_id = None
+    state_active = False
+    if prep_state_str and order_ids:
+        try:
+            state_customer_id, _ = map(int, str(prep_state_str).split(':'))
+        except ValueError:
+            state_customer_id = None
+
+    if state_customer_id and state_customer_id in order_ids and str(state_customer_id) in (reservations_map or {}):
+        try:
+            counts = list(map(int, reservations_map[str(state_customer_id)].split(',')))
+        except Exception:
+            counts = []
+        needed = sum(counts) if counts else 0
+        already_made = breads_per_customer.get(state_customer_id, 0)
+        if already_made < needed:
+            state_active = True
+        else:
+            urgent_original_extra = await redis_helper.get_urgent_original_counts_for_ticket(
+                r, bakery_id, state_customer_id, time_per_bread
+            )
+            if urgent_original_extra:
+                state_active = True
+
+    # If urgent is currently processing / next, only show it if it belongs to the active ticket.
+    if urgent_id and time_per_bread and state_active and state_customer_id:
+        urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, urgent_id)
+        pipe_u = r.pipeline()
+        pipe_u.hget(urgent_item_key, "ticket_id")
+        pipe_u.hget(urgent_item_key, "original_breads")
+        ticket_id_raw, original_raw = await pipe_u.execute()
+
+        if ticket_id_raw and int(ticket_id_raw) == int(state_customer_id):
+            original_counts = []
+            if original_raw:
+                original_counts = [int(x) for x in _as_text(original_raw).split(",") if str(x) != ""]
+            if len(original_counts) < len(bread_ids_sorted):
+                original_counts = original_counts + [0] * (len(bread_ids_sorted) - len(original_counts))
+
+            if any(int(x) > 0 for x in original_counts[: len(bread_ids_sorted)]):
+                urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
+                return {
+                    "customer_id": int(ticket_id_raw),
+                    "customer_breads": urgent_breads,
+                    "next_customer": False,
+                    "urgent": True,
+                    "urgent_id": urgent_id,
+                }
 
     # ============================================================
     # LOGIC: Determine which customer's breads are currently relevant
@@ -539,6 +598,9 @@ async def current_cook_customer(
 
     working_customer_id = get_queue_working_customer()
 
+    if state_active and state_customer_id:
+        working_customer_id = state_customer_id
+
     if working_customer_id:
         response = {
             "customer_id": working_customer_id,
@@ -546,6 +608,28 @@ async def current_cook_customer(
             "next_customer": False,
         }
     else:
+        if urgent_id and time_per_bread:
+            urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, urgent_id)
+            pipe_u = r.pipeline()
+            pipe_u.hget(urgent_item_key, "ticket_id")
+            pipe_u.hget(urgent_item_key, "original_breads")
+            ticket_id_raw, original_raw = await pipe_u.execute()
+
+            original_counts = []
+            if original_raw:
+                original_counts = [int(x) for x in _as_text(original_raw).split(",") if str(x) != ""]
+            if len(original_counts) < len(bread_ids_sorted):
+                original_counts = original_counts + [0] * (len(bread_ids_sorted) - len(original_counts))
+
+            if any(int(x) > 0 for x in original_counts[: len(bread_ids_sorted)]):
+                urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
+                return {
+                    "customer_id": int(ticket_id_raw) if ticket_id_raw else -1,
+                    "customer_breads": urgent_breads,
+                    "next_customer": False,
+                    "urgent": True,
+                    "urgent_id": urgent_id,
+                }
         response = {
             "has_customer": False,
             "belongs_to_customer": False,
@@ -665,6 +749,7 @@ async def new_bread(
     last_completed_customer = None
 
     urgent_prep_key = redis_helper.REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+    urgent_queue_key = redis_helper.REDIS_KEY_URGENT_QUEUE.format(bakery_id)
     urgent_processing_raw = await r.get(urgent_prep_key)
     if urgent_processing_raw and time_per_bread:
         urgent_id = _as_text(urgent_processing_raw)
@@ -673,65 +758,103 @@ async def new_bread(
         pipe_u = r.pipeline()
         pipe_u.hget(urgent_item_key, "ticket_id")
         pipe_u.hget(urgent_item_key, "original_breads")
-        ticket_id_raw, original_raw = await pipe_u.execute()
+        pipe_u.hget(urgent_item_key, "created_at")
+        ticket_id_raw, original_raw, created_at_raw = await pipe_u.execute()
 
-        urgent_state = await redis_helper.consume_one_urgent_bread(r, bakery_id, time_per_bread)
-        did_urgent_bread = True
-        update_prep_state = False
-        bread_belongs_to = int(ticket_id_raw) if ticket_id_raw else 0
+        state_customer_id = None
+        if prep_state_str:
+            try:
+                state_customer_id, _ = map(int, str(prep_state_str).split(':'))
+            except ValueError:
+                state_customer_id = None
 
-        original_counts = []
-        if original_raw:
-            original_counts = [int(x) for x in _as_text(original_raw).split(",") if str(x) != ""]
-        if len(original_counts) < len(bread_ids_sorted):
-            original_counts = original_counts + [0] * (len(bread_ids_sorted) - len(original_counts))
-        urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
-        urgent_customer_id = int(ticket_id_raw) if ticket_id_raw else -1
+        if state_customer_id and ticket_id_raw and int(ticket_id_raw) != int(state_customer_id):
+            try:
+                score = int(created_at_raw) if created_at_raw else int(time.time())
+            except Exception:
+                score = int(time.time())
+            pipe_back = r.pipeline(transaction=True)
+            pipe_back.hset(urgent_item_key, "status", "PENDING")
+            pipe_back.delete(urgent_prep_key)
+            pipe_back.zadd(urgent_queue_key, {str(urgent_id): score})
+            ttl = seconds_until_midnight_iran()
+            pipe_back.expire(urgent_queue_key, ttl)
+            pipe_back.expire(urgent_item_key, ttl)
+            await pipe_back.execute()
+            urgent_processing_raw = None
+        else:
+            urgent_state = await redis_helper.consume_one_urgent_bread(r, bakery_id, time_per_bread)
+            if urgent_state:
+                tasks.log_urgent_remaining.delay(
+                    bakery_id,
+                    urgent_id,
+                    urgent_state.get("remaining_by_type") or {},
+                    bool(urgent_state.get("done")),
+                )
+            did_urgent_bread = True
+            update_prep_state = False
+            bread_belongs_to = int(ticket_id_raw) if ticket_id_raw else 0
 
-        if urgent_state and urgent_state.get("done"):
-            next_urgent_id = await redis_helper.start_next_urgent_if_available(r, bakery_id)
-            if next_urgent_id and str(next_urgent_id) != str(urgent_id):
-                next_item_key = redis_helper.get_urgent_item_key(bakery_id, str(next_urgent_id))
-                pipe_n = r.pipeline()
-                pipe_n.hget(next_item_key, "ticket_id")
-                pipe_n.hget(next_item_key, "original_breads")
-                next_ticket_id_raw, next_original_raw = await pipe_n.execute()
+        if urgent_processing_raw:
+            original_counts = []
+            if original_raw:
+                original_counts = [int(x) for x in _as_text(original_raw).split(",") if str(x) != ""]
+            if len(original_counts) < len(bread_ids_sorted):
+                original_counts = original_counts + [0] * (len(bread_ids_sorted) - len(original_counts))
+            urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
+            urgent_customer_id = int(ticket_id_raw) if ticket_id_raw else -1
 
-                next_counts = []
-                if next_original_raw:
-                    next_counts = [int(x) for x in _as_text(next_original_raw).split(",") if str(x) != ""]
-                if len(next_counts) < len(bread_ids_sorted):
-                    next_counts = next_counts + [0] * (len(bread_ids_sorted) - len(next_counts))
-                next_urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, next_counts)}
+            if urgent_state and urgent_state.get("done"):
+                next_urgent_id = None
+                if ticket_id_raw:
+                    next_urgent_id = await redis_helper.start_next_urgent_for_ticket_if_available(
+                        r, bakery_id, int(ticket_id_raw)
+                    )
+                if not next_urgent_id:
+                    next_urgent_id = await redis_helper.start_next_urgent_if_available(r, bakery_id)
+                if next_urgent_id and str(next_urgent_id) != str(urgent_id):
+                    tasks.log_urgent_processing.delay(bakery_id, str(next_urgent_id))
+                    next_item_key = redis_helper.get_urgent_item_key(bakery_id, str(next_urgent_id))
+                    pipe_n = r.pipeline()
+                    pipe_n.hget(next_item_key, "ticket_id")
+                    pipe_n.hget(next_item_key, "original_breads")
+                    next_ticket_id_raw, next_original_raw = await pipe_n.execute()
+
+                    next_counts = []
+                    if next_original_raw:
+                        next_counts = [int(x) for x in _as_text(next_original_raw).split(",") if str(x) != ""]
+                    if len(next_counts) < len(bread_ids_sorted):
+                        next_counts = next_counts + [0] * (len(bread_ids_sorted) - len(next_counts))
+                    next_urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, next_counts)}
+                    response = {
+                        "customer_id": int(next_ticket_id_raw) if next_ticket_id_raw else -1,
+                        "customer_breads": next_urgent_breads,
+                        "next_customer": False,
+                        "urgent": True,
+                        "urgent_id": str(next_urgent_id),
+                    }
+                else:
+                    next_customer = find_next_incomplete_customer(after_customer_id=None)
+                    if next_customer:
+                        response = {
+                            "customer_id": next_customer,
+                            "customer_breads": get_customer_breads_dict(next_customer),
+                            "next_customer": True,
+                        }
+                        current_served_candidate = next_customer
+                    else:
+                        response = {
+                            "has_customer": False,
+                            "belongs_to_customer": True,
+                        }
+            else:
                 response = {
-                    "customer_id": int(next_ticket_id_raw) if next_ticket_id_raw else -1,
-                    "customer_breads": next_urgent_breads,
+                    "customer_id": urgent_customer_id,
+                    "customer_breads": urgent_breads,
                     "next_customer": False,
                     "urgent": True,
-                    "urgent_id": str(next_urgent_id),
+                    "urgent_id": str(urgent_id),
                 }
-            else:
-                next_customer = find_next_incomplete_customer(after_customer_id=None)
-                if next_customer:
-                    response = {
-                        "customer_id": next_customer,
-                        "customer_breads": get_customer_breads_dict(next_customer),
-                        "next_customer": True,
-                    }
-                    current_served_candidate = next_customer
-                else:
-                    response = {
-                        "has_customer": False,
-                        "belongs_to_customer": True,
-                    }
-        else:
-            response = {
-                "customer_id": urgent_customer_id,
-                "customer_breads": urgent_breads,
-                "next_customer": False,
-                "urgent": True,
-                "urgent_id": str(urgent_id),
-            }
     else:
         # Determine which customer to work on
         # Priority: Continue with customer from prep_state if they're still incomplete
@@ -749,7 +872,14 @@ async def new_bread(
                     working_customer_id = state_customer_id
                     breads_made = already_made
                 else:
-                    last_completed_customer = state_customer_id
+                    urgent_original_extra = await redis_helper.get_urgent_original_counts_for_ticket(
+                        r, bakery_id, state_customer_id, time_per_bread
+                    )
+                    if urgent_original_extra:
+                        working_customer_id = state_customer_id
+                        breads_made = already_made
+                    else:
+                        last_completed_customer = state_customer_id
 
         if working_customer_id is None and order_ids:
             for customer_id in order_ids:
@@ -765,6 +895,7 @@ async def new_bread(
         if working_customer_id is None:
             urgent_id = await redis_helper.start_next_urgent_if_available(r, bakery_id)
             if urgent_id and time_per_bread:
+                tasks.log_urgent_processing.delay(bakery_id, str(urgent_id))
                 urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(urgent_id))
                 pipe_u = r.pipeline()
                 pipe_u.hget(urgent_item_key, "ticket_id")
@@ -772,6 +903,13 @@ async def new_bread(
                 ticket_id_raw, original_raw = await pipe_u.execute()
 
                 urgent_state = await redis_helper.consume_one_urgent_bread(r, bakery_id, time_per_bread)
+                if urgent_state:
+                    tasks.log_urgent_remaining.delay(
+                        bakery_id,
+                        str(urgent_id),
+                        urgent_state.get("remaining_by_type") or {},
+                        bool(urgent_state.get("done")),
+                    )
                 did_urgent_bread = True
                 update_prep_state = False
                 bread_belongs_to = int(ticket_id_raw) if ticket_id_raw else 0
@@ -798,17 +936,65 @@ async def new_bread(
                 }
         else:
             bread_belongs_to = working_customer_id
-            breads_made += 1
-
             customer_needs = get_customer_needs(working_customer_id)
-            is_customer_done = breads_made >= customer_needs
+
+            # Restart-safe: if base breads are already complete but this ticket has its own urgent,
+            # the next baked bread must be urgent (not an extra base bread).
+            if breads_made >= customer_needs:
+                own_urgent_id = await redis_helper.start_next_urgent_for_ticket_if_available(
+                    r, bakery_id, working_customer_id
+                )
+                if own_urgent_id and time_per_bread:
+                    tasks.log_urgent_processing.delay(bakery_id, str(own_urgent_id))
+                    urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(own_urgent_id))
+                    pipe_u = r.pipeline()
+                    pipe_u.hget(urgent_item_key, "ticket_id")
+                    pipe_u.hget(urgent_item_key, "original_breads")
+                    ticket_id_raw, original_raw = await pipe_u.execute()
+
+                    urgent_state = await redis_helper.consume_one_urgent_bread(r, bakery_id, time_per_bread)
+                    if urgent_state:
+                        tasks.log_urgent_remaining.delay(
+                            bakery_id,
+                            str(own_urgent_id),
+                            urgent_state.get("remaining_by_type") or {},
+                            bool(urgent_state.get("done")),
+                        )
+                    did_urgent_bread = True
+                    update_prep_state = False
+                    bread_belongs_to = int(ticket_id_raw) if ticket_id_raw else 0
+
+                    original_counts = []
+                    if original_raw:
+                        original_counts = [int(x) for x in _as_text(original_raw).split(",") if str(x) != ""]
+                    if len(original_counts) < len(bread_ids_sorted):
+                        original_counts = original_counts + [0] * (len(bread_ids_sorted) - len(original_counts))
+                    urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
+
+                    response = {
+                        "customer_id": int(ticket_id_raw) if ticket_id_raw else -1,
+                        "customer_breads": urgent_breads,
+                        "next_customer": False,
+                        "urgent": True,
+                        "urgent_id": str(own_urgent_id),
+                    }
+                    is_customer_done = False
+                else:
+                    breads_made += 1
+                    is_customer_done = breads_made >= customer_needs
+            else:
+                breads_made += 1
+                is_customer_done = breads_made >= customer_needs
 
             if is_customer_done:
                 breads_per_customer[working_customer_id] = breads_made
 
-                urgent_id = await redis_helper.start_next_urgent_if_available(r, bakery_id)
-                if urgent_id and time_per_bread:
-                    urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(urgent_id))
+                own_urgent_id = await redis_helper.start_next_urgent_for_ticket_if_available(
+                    r, bakery_id, working_customer_id
+                )
+                if own_urgent_id and time_per_bread:
+                    tasks.log_urgent_processing.delay(bakery_id, str(own_urgent_id))
+                    urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(own_urgent_id))
                     pipe_u = r.pipeline()
                     pipe_u.hget(urgent_item_key, "ticket_id")
                     pipe_u.hget(urgent_item_key, "original_breads")
@@ -826,23 +1012,47 @@ async def new_bread(
                         "customer_breads": urgent_breads,
                         "next_customer": False,
                         "urgent": True,
-                        "urgent_id": str(urgent_id),
+                        "urgent_id": str(own_urgent_id),
                     }
                 else:
-                    next_customer = find_next_incomplete_customer(after_customer_id=None)
-                    if next_customer:
+                    urgent_id = await redis_helper.start_next_urgent_if_available(r, bakery_id)
+                    if urgent_id and time_per_bread:
+                        tasks.log_urgent_processing.delay(bakery_id, str(urgent_id))
+                        urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(urgent_id))
+                        pipe_u = r.pipeline()
+                        pipe_u.hget(urgent_item_key, "ticket_id")
+                        pipe_u.hget(urgent_item_key, "original_breads")
+                        ticket_id_raw, original_raw = await pipe_u.execute()
+
+                        original_counts = []
+                        if original_raw:
+                            original_counts = [int(x) for x in _as_text(original_raw).split(",") if str(x) != ""]
+                        if len(original_counts) < len(bread_ids_sorted):
+                            original_counts = original_counts + [0] * (len(bread_ids_sorted) - len(original_counts))
+                        urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
+
                         response = {
-                            "customer_id": next_customer,
-                            "customer_breads": get_customer_breads_dict(next_customer),
-                            "next_customer": True,
+                            "customer_id": int(ticket_id_raw) if ticket_id_raw else -1,
+                            "customer_breads": urgent_breads,
+                            "next_customer": False,
+                            "urgent": True,
+                            "urgent_id": str(urgent_id),
                         }
-                        current_served_candidate = next_customer
                     else:
-                        await redis_helper.set_display_flag(r, bakery_id)
-                        response = {
-                            "has_customer": False,
-                            "belongs_to_customer": True,
-                        }
+                        next_customer = find_next_incomplete_customer(after_customer_id=None)
+                        if next_customer:
+                            response = {
+                                "customer_id": next_customer,
+                                "customer_breads": get_customer_breads_dict(next_customer),
+                                "next_customer": True,
+                            }
+                            current_served_candidate = next_customer
+                        else:
+                            await redis_helper.set_display_flag(r, bakery_id)
+                            response = {
+                                "has_customer": False,
+                                "belongs_to_customer": True,
+                            }
             else:
                 response = {
                     "customer_id": working_customer_id,
