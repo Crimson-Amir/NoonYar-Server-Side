@@ -75,22 +75,31 @@ async def urgent_inject(
         order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
         wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
         served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
+        base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
         ttl = seconds_until_midnight_iran()
 
         in_queue = await r.hexists(res_key, str(ticket_id))
+
+        wait_list_reservation = await r.hget(wait_list_key, str(ticket_id))
+        if (not in_queue) and wait_list_reservation:
+            encoded_reservation = str(wait_list_reservation)
 
         pipe = r.pipeline(transaction=True)
         pipe.srem(served_key, int(ticket_id))
         pipe.hdel(wait_list_key, str(ticket_id))
         if not in_queue:
             pipe.hset(res_key, str(ticket_id), encoded_reservation)
+            pipe.sadd(base_done_key, str(ticket_id))
         pipe.zadd(order_key, {str(ticket_id): int(ticket_id)})
         pipe.expire(res_key, ttl)
         pipe.expire(order_key, ttl)
         pipe.expire(wait_list_key, ttl)
+        pipe.expire(base_done_key, ttl)
         await pipe.execute()
 
         crud.update_customer_status_to_true(db, ticket_id, bakery_id)
+        crud.update_wait_list_customer_status(db, ticket_id, bakery_id, False)
+        db.commit()
 
     urgent_id = await redis_helper.create_urgent_item(
         r,
@@ -242,6 +251,8 @@ async def reset_today(
     )
 
     crud.update_all_customers_status_to_false(db, bakery_id)
+
+    db.commit()
 
     r = request.app.state.redis
     await redis_helper.purge_bakery_data(r, bakery_id)

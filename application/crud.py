@@ -124,32 +124,68 @@ def new_customer_to_upcoming_customers(db: Session, customer_id):
     return upcoming_customer
 
 def update_customer_status_to_false(db: Session, ticket_id: int, bakery_id: int):
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    ids = [
+        int(x)
+        for (x,) in (
+            db.query(models.Customer.id)
+            .filter(
+                models.Customer.ticket_id == ticket_id,
+                models.Customer.bakery_id == bakery_id,
+                models.Customer.is_in_queue == True,
+                models.Customer.register_date >= midnight_utc,
+            )
+            .order_by(models.Customer.register_date.desc(), models.Customer.id.desc())
+            .all()
+        )
+    ]
+    if not ids:
+        return None
+
     stmt = (
         update(models.Customer)
-        .where(models.Customer.ticket_id == ticket_id)
-        .where(models.Customer.bakery_id == bakery_id)
-        .where(models.Customer.is_in_queue == True)
+        .where(models.Customer.id.in_(ids))
         .values(is_in_queue=False)
-        .returning(models.Customer.id)
     )
 
-    result = db.execute(stmt)
+    db.execute(stmt)
     db.commit()
-    customer_id = result.scalar_one_or_none()
-
-    return customer_id
+    return int(ids[0])
 
 def update_customer_status_to_true(db: Session, ticket_id: int, bakery_id: int):
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    ids = [
+        int(x)
+        for (x,) in (
+            db.query(models.Customer.id)
+            .filter(
+                models.Customer.ticket_id == ticket_id,
+                models.Customer.bakery_id == bakery_id,
+                models.Customer.register_date >= midnight_utc,
+            )
+            .order_by(models.Customer.register_date.desc(), models.Customer.id.desc())
+            .all()
+        )
+    ]
+    if not ids:
+        return None
+
     stmt = (
         update(models.Customer)
-        .where(models.Customer.ticket_id == ticket_id)
-        .where(models.Customer.bakery_id == bakery_id)
+        .where(models.Customer.id.in_(ids))
         .values(is_in_queue=True)
-        .returning(models.Customer.id)
     )
-    customer_id = db.execute(stmt).scalar()
+    db.execute(stmt)
     db.commit()
-    return customer_id
+    return int(ids[0])
 
 def update_all_customers_status_to_false(db: Session, bakery_id: int):
     stmt = (
@@ -366,6 +402,13 @@ def edit_bread_names(db: Session, bread_type_and_new_name: dict):
     db.commit()
 
 def add_new_ticket_to_wait_list(db: Session, customer_id, is_in_queue=True):
+    existing = db.query(models.WaitList).filter(models.WaitList.customer_id == customer_id).first()
+    if existing:
+        existing.is_in_queue = bool(is_in_queue)
+        existing.register_date = datetime.now(pytz.UTC)
+        db.commit()
+        return existing
+
     new_entry = models.WaitList(customer_id=customer_id, is_in_queue=is_in_queue)
     db.add(new_entry)
     db.commit()
@@ -559,11 +602,16 @@ def get_customer_by_ticket_id_any_status(db: Session, ticket_id: int, bakery_id:
     midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
     midnight_utc = midnight_tehran.astimezone(pytz.utc)
 
-    return db.query(models.Customer).filter(
-        models.Customer.ticket_id == ticket_id,
-        models.Customer.bakery_id == bakery_id,
-        models.Customer.register_date >= midnight_utc,
-    ).first()
+    return (
+        db.query(models.Customer)
+        .filter(
+            models.Customer.ticket_id == ticket_id,
+            models.Customer.bakery_id == bakery_id,
+            models.Customer.register_date >= midnight_utc,
+        )
+        .order_by(models.Customer.register_date.desc(), models.Customer.id.desc())
+        .first()
+    )
 
 
 def delete_customer_by_ticket_id_today(db: Session, bakery_id: int, ticket_id: int) -> bool:

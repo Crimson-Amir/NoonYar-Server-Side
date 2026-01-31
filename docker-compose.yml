@@ -32,6 +32,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  beat:
+    image: voidtrek/noonyar:latest
+    command: celery -A application.tasks beat --loglevel=info
+    env_file: .env
+    volumes:
+      - ./logs:/var/log/noonyar
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
   db:
     image: postgres:15
     environment:

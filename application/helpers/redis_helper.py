@@ -36,6 +36,8 @@ REDIS_KEY_SERVED_TICKETS = f"{REDIS_KEY_PREFIX}:served_tickets"
 REDIS_KEY_USER_CURRENT_TICKET = f"{REDIS_KEY_PREFIX}:user_current_ticket"
 REDIS_KEY_URGENT_QUEUE = f"{REDIS_KEY_PREFIX}:urgent_queue"
 REDIS_KEY_URGENT_PREP_STATE = f"{REDIS_KEY_PREFIX}:urgent_prep_state"
+REDIS_KEY_URGENT_ALL_IDS = f"{REDIS_KEY_PREFIX}:urgent_all_ids"
+REDIS_KEY_BASE_DONE = f"{REDIS_KEY_PREFIX}:base_done"
 
 
 def get_urgent_item_key(bakery_id: int, urgent_id: str) -> str:
@@ -199,10 +201,13 @@ async def add_customer_to_reservation_dict(
 
 async def add_customer_to_wait_list(r, bakery_id: int, customer_id: int, reservations: list[int]=None, reservations_str=None):
     skipped_customer_key = REDIS_KEY_WAIT_LIST.format(bakery_id)
+    base_done_key = REDIS_KEY_BASE_DONE.format(bakery_id)
     pipe = r.pipeline()
     pipe.hset(skipped_customer_key, str(customer_id), reservations_str or ",".join(map(str, reservations)))
     ttl = seconds_until_midnight_iran()
     pipe.expire(skipped_customer_key, ttl)
+    pipe.sadd(base_done_key, str(customer_id))
+    pipe.expire(base_done_key, ttl)
     await pipe.execute()
 
 async def reset_bakery_metadata(r, bakery_id: int):
@@ -1168,6 +1173,188 @@ async def calculate_ready_status(
         return False, True, remaining_time
 
 
+async def select_best_ticket_by_ready_time(r, bakery_id: int):
+    time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
+    order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
+    breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    baking_time_key = REDIS_KEY_BAKING_TIME_S.format(bakery_id)
+    base_done_key = REDIS_KEY_BASE_DONE.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.zrange(order_key, 0, -1)
+    pipe.hgetall(time_key)
+    pipe.hgetall(res_key)
+    pipe.get(baking_time_key)
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')
+    pipe.smembers(base_done_key)
+    order_ids_raw, time_per_bread_raw, reservations_map, baking_time_s_raw, all_breads, base_done_raw = await pipe.execute()
+
+    if not order_ids_raw:
+        return None
+
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            return v.decode()
+        return str(v)
+
+    time_per_bread = {_as_text(k): int(v) for k, v in (time_per_bread_raw or {}).items()} if time_per_bread_raw else {}
+    if not time_per_bread:
+        return None
+
+    if not reservations_map:
+        return None
+
+    bread_ids_sorted = sorted(time_per_bread.keys())
+    baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
+    order_ids = [int(_as_text(x)) for x in order_ids_raw]
+    reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()}
+    reservation_keys = sorted(reservation_dict.keys())
+
+    base_done_ids = set(int(_as_text(x)) for x in (base_done_raw or []) if _as_text(x) is not None)
+
+    breads_by_customer = defaultdict(list)
+    for bread_value in all_breads or []:
+        bread_value = _as_text(bread_value)
+        if not bread_value or ':' not in bread_value:
+            continue
+        try:
+            ts_str, cid_str = bread_value.split(':')
+            cid = int(cid_str)
+            ts = float(ts_str)
+        except Exception:
+            continue
+        breads_by_customer[cid].append(ts)
+    for cid in breads_by_customer:
+        breads_by_customer[cid].sort()
+
+    # Tickets that moved to wait list have their baked breads removed from Redis.
+    # Use base_done marker to treat base breads as already baked (timestamp=0.0).
+    for tid, counts in reservation_dict.items():
+        if int(tid) not in base_done_ids:
+            continue
+        base_total = int(sum(int(x) for x in counts))
+        if base_total <= 0:
+            continue
+        existing = breads_by_customer.get(int(tid), [])
+        if len(existing) >= base_total:
+            continue
+        breads_by_customer[int(tid)] = sorted(([0.0] * (base_total - len(existing))) + list(existing))
+
+    urgent_by_ticket = await get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
+    urgent_remaining_time = await get_urgent_remaining_total_time(r, bakery_id, time_per_bread)
+
+    total_needed_by_ticket = {}
+    base_detail_by_ticket = {}
+    for tid, counts in reservation_dict.items():
+        base_detail = {bid: int(c) for bid, c in zip(bread_ids_sorted, counts)}
+        base_detail_by_ticket[int(tid)] = base_detail
+        extra = urgent_by_ticket.get(int(tid), {}) or {}
+        total_needed_by_ticket[int(tid)] = int(sum(base_detail.values())) + int(sum(int(v) for v in extra.values()))
+
+    now = time.time()
+    avg_cook_time = (sum(time_per_bread.values()) // len(time_per_bread)) if time_per_bread else 0
+
+    def estimate_wait_until(tid: int) -> int:
+        need_total = int(total_needed_by_ticket.get(int(tid), 0))
+        if need_total <= 0:
+            return 0
+
+        breads_ts = breads_by_customer.get(int(tid), [])
+        if breads_ts and len(breads_ts) >= need_total:
+            ready_at = float(breads_ts[need_total - 1])
+            return max(0, int(ready_at - now))
+
+        if not all_breads:
+            total_wait_s = int(baking_time_s)
+            for key in reservation_keys:
+                if int(key) > int(tid):
+                    break
+                base_counts = reservation_dict[int(key)]
+                base_detail = {bid: int(c) for bid, c in zip(bread_ids_sorted, base_counts)}
+                extra = urgent_by_ticket.get(int(key), {}) or {}
+                eff = dict(base_detail)
+                for k, v in extra.items():
+                    eff[k] = int(eff.get(k, 0)) + int(v)
+                total_wait_s += sum(int(count) * int(time_per_bread[str(bid)]) for bid, count in eff.items())
+            if urgent_remaining_time:
+                total_wait_s += int(urgent_remaining_time)
+            return int(total_wait_s)
+
+        if not breads_ts:
+            base_detail = dict(base_detail_by_ticket.get(int(tid), {}))
+            extra = urgent_by_ticket.get(int(tid), {}) or {}
+            eff = dict(base_detail)
+            for k, v in extra.items():
+                eff[k] = int(eff.get(k, 0)) + int(v)
+
+            prep_time = sum(int(count) * int(time_per_bread[str(bid)]) for bid, count in eff.items())
+
+            total_remaining_before = 0
+            for cid in [key for key in reservation_keys if int(key) < int(tid)]:
+                cid = int(cid)
+                made = len(breads_by_customer.get(cid, []))
+                needed = int(total_needed_by_ticket.get(cid, 0))
+                if made >= needed:
+                    continue
+                if made > 0:
+                    total_remaining_before += (needed - made) * int(avg_cook_time)
+                else:
+                    base_detail_prev = dict(base_detail_by_ticket.get(cid, {}))
+                    extra_prev = urgent_by_ticket.get(cid, {}) or {}
+                    eff_prev = dict(base_detail_prev)
+                    for k, v in extra_prev.items():
+                        eff_prev[k] = int(eff_prev.get(k, 0)) + int(v)
+                    total_remaining_before += sum(
+                        int(count) * int(time_per_bread[str(bid)])
+                        for bid, count in eff_prev.items()
+                    )
+
+            total_wait_s = int(total_remaining_before) + int(prep_time) + int(baking_time_s)
+            if urgent_remaining_time:
+                total_wait_s += int(urgent_remaining_time)
+            return int(total_wait_s)
+
+        remaining = need_total - len(breads_ts)
+        active_types = []
+        base_detail = dict(base_detail_by_ticket.get(int(tid), {}))
+        extra = urgent_by_ticket.get(int(tid), {}) or {}
+        eff = dict(base_detail)
+        for k, v in extra.items():
+            eff[k] = int(eff.get(k, 0)) + int(v)
+        for bread_type, count in eff.items():
+            if int(count) > 0:
+                active_types.append(int(time_per_bread[str(bread_type)]))
+        this_avg = (sum(active_types) // len(active_types)) if active_types else int(avg_cook_time)
+        return int(remaining * this_avg + baking_time_s)
+
+    best_tid = None
+    best_wait = None
+    for tid in order_ids:
+        if int(tid) not in reservation_dict:
+            continue
+        w = int(estimate_wait_until(int(tid)))
+        if best_wait is None or w < best_wait or (w == best_wait and int(tid) < int(best_tid)):
+            best_tid = int(tid)
+            best_wait = int(w)
+
+    if best_tid is None:
+        return None
+
+    return {
+        "ticket_id": int(best_tid),
+        "wait_until": int(best_wait or 0),
+        "ready": bool(int(best_wait or 0) == 0),
+        "time_per_bread": time_per_bread,
+        "reservation_dict": reservation_dict,
+        "reservation_keys": reservation_keys,
+        "bread_ids_sorted": bread_ids_sorted,
+        "urgent_by_ticket": urgent_by_ticket,
+    }
+
+
 async def create_urgent_item(r, bakery_id: int, ticket_id: int | None, bread_requirements: dict, time_per_bread: dict) -> str:
     bread_ids_sorted = sorted(time_per_bread.keys())
     encoded = ",".join(str(int(bread_requirements.get(bid, 0))) for bid in bread_ids_sorted)
@@ -1176,6 +1363,7 @@ async def create_urgent_item(r, bakery_id: int, ticket_id: int | None, bread_req
     ttl = seconds_until_midnight_iran()
 
     queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
+    all_key = REDIS_KEY_URGENT_ALL_IDS.format(bakery_id)
     item_key = get_urgent_item_key(bakery_id, urgent_id)
 
     pipe = r.pipeline(transaction=True)
@@ -1189,6 +1377,8 @@ async def create_urgent_item(r, bakery_id: int, ticket_id: int | None, bread_req
     pipe.expire(item_key, ttl)
     pipe.zadd(queue_key, {urgent_id: now_ts})
     pipe.expire(queue_key, ttl)
+    pipe.sadd(all_key, urgent_id)
+    pipe.expire(all_key, ttl)
     await pipe.execute()
     return urgent_id
 
@@ -1322,7 +1512,7 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     Uses urgent items' `original_breads` so the injected quantity remains stable
     during baking (similar to how normal ticket breads are shown).
 
-    Includes only PENDING/PROCESSING items.
+    Includes PENDING/PROCESSING/DONE items.
     """
     if not time_per_bread:
         return {}
@@ -1340,11 +1530,19 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     bread_ids_sorted = sorted(time_per_bread.keys())
     queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
     prep_key = REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+    all_key = REDIS_KEY_URGENT_ALL_IDS.format(bakery_id)
 
-    urgent_ids = await r.zrange(queue_key, 0, -1)
-    processing_raw = await r.get(prep_key)
+    pipe0 = r.pipeline()
+    pipe0.zrange(queue_key, 0, -1)
+    pipe0.get(prep_key)
+    pipe0.smembers(all_key)
+    urgent_ids, processing_raw, all_ids = await pipe0.execute()
 
-    ids = list(urgent_ids or [])
+    ids = list(all_ids or [])
+    if urgent_ids:
+        for uid in urgent_ids:
+            if uid not in ids:
+                ids.append(uid)
     if processing_raw:
         pid = _as_text(processing_raw)
         if pid and pid not in ids:
@@ -1365,7 +1563,7 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     for i in range(0, len(rows), 3):
         ticket_id_raw, original_raw, status_raw = rows[i], rows[i + 1], rows[i + 2]
         status = _as_text(status_raw)
-        if status not in ("PENDING", "PROCESSING"):
+        if status not in ("PENDING", "PROCESSING", "DONE"):
             continue
 
         ticket_id_txt = _as_text(ticket_id_raw)
