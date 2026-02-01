@@ -1012,12 +1012,27 @@ async def purge_bakery_data(r, bakery_id: int):
         REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id),
         REDIS_KEY_URGENT_QUEUE.format(bakery_id),
         REDIS_KEY_URGENT_PREP_STATE.format(bakery_id),
+        REDIS_KEY_URGENT_ALL_IDS.format(bakery_id),
+        REDIS_KEY_BASE_DONE.format(bakery_id),
     ]
 
     pipe = r.pipeline(transaction=True)
     for key in keys:
         pipe.delete(key)
     await pipe.execute()
+
+    # Also remove all urgent item hashes for this bakery.
+    # These keys are dynamic (one per urgent_id) and must be cleared on reset.
+    pattern = f"bakery:{int(bakery_id)}:urgent_item:*"
+    item_keys = []
+    async for k in r.scan_iter(match=pattern, count=200):
+        item_keys.append(k)
+
+    if item_keys:
+        pipe2 = r.pipeline(transaction=True)
+        for k in item_keys:
+            pipe2.delete(k)
+        await pipe2.execute()
 
 
 async def calculate_ready_status(
@@ -1555,7 +1570,7 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     for uid in ids:
         item_key = get_urgent_item_key(bakery_id, str(_as_text(uid)))
         pipe.hget(item_key, "ticket_id")
-        pipe.hget(item_key, "original_breads")
+        pipe.hget(item_key, "remaining_breads")
         pipe.hget(item_key, "status")
     rows = await pipe.execute()
 
@@ -1850,13 +1865,34 @@ async def rebuild_prep_state(r, bakery_id: int):
     order_key = REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
     res_key = REDIS_KEY_RESERVATIONS.format(bakery_id)
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    base_done_key = REDIS_KEY_BASE_DONE.format(bakery_id)
+    current_served_key = REDIS_KEY_CURRENT_SERVED.format(bakery_id)
+    urgent_prep_key = REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+    urgent_queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
 
     pipe = r.pipeline()
+    pipe.get(prep_state_key)
     pipe.zrange(order_key, 0, -1)
     pipe.hgetall(res_key)
     pipe.zrangebyscore(breads_key, '-inf', '+inf')
+    pipe.smembers(base_done_key)
+    pipe.get(current_served_key)
+    pipe.get(urgent_prep_key)
+    pipe.zcard(urgent_queue_key)
 
-    order_ids, reservations_map, all_breads = await pipe.execute()
+    current_prep_raw, order_ids, reservations_map, all_breads, base_done_raw, current_served_raw, urgent_processing_raw, urgent_queue_len = await pipe.execute()
+
+    urgent_exists = bool(urgent_processing_raw) or (int(urgent_queue_len or 0) > 0)
+
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode()
+            except Exception:
+                return None
+        return str(v)
 
     if not order_ids or not reservations_map:
         # No customers at all
@@ -1864,23 +1900,85 @@ async def rebuild_prep_state(r, bakery_id: int):
         print(f"No customers in queue for bakery {bakery_id}, cleared prep_state")
         return
 
-    order_ids = [int(x) for x in order_ids]
-    reservation_dict = {int(k): list(map(int, v.split(","))) for k, v in reservations_map.items()}
+    order_ids = [int(_as_text(x)) for x in order_ids]
+    reservation_dict = {
+        int(_as_text(k)): list(map(int, _as_text(v).split(",")))
+        for k, v in reservations_map.items()
+        if _as_text(k) is not None and _as_text(v) is not None
+    }
 
     # Count breads per customer
     breads_per_customer = defaultdict(int)
     for bread_value in all_breads:
-        if ':' in bread_value:
+        bread_value = _as_text(bread_value)
+        if not bread_value or ':' not in bread_value:
+            continue
+        try:
             cid = int(bread_value.split(':')[1])
-            breads_per_customer[cid] += 1
+        except Exception:
+            continue
+        breads_per_customer[cid] += 1
+
+    base_done_ids = set(int(_as_text(x)) for x in (base_done_raw or []) if _as_text(x) is not None)
+    for cid in base_done_ids:
+        if int(cid) not in reservation_dict:
+            continue
+        total_needed = int(sum(reservation_dict[int(cid)]))
+        breads_per_customer[int(cid)] = max(int(breads_per_customer.get(int(cid), 0)), int(total_needed))
+
+    current_state_customer_id = None
+    current_prep_str = _as_text(current_prep_raw)
+    if current_prep_str and ':' in current_prep_str:
+        try:
+            current_state_customer_id, _ = map(int, current_prep_str.split(':'))
+        except Exception:
+            current_state_customer_id = None
+
+    current_served_id = 0
+    current_served_str = _as_text(current_served_raw)
+    if current_served_str:
+        try:
+            current_served_id = int(current_served_str)
+        except Exception:
+            current_served_id = 0
 
     ttl = seconds_until_midnight_iran()
 
+    # Sticky lock: if current_served is still in the queue and incomplete, it must win.
+    # This prevents re-inserted tickets (e.g. from wait list) with lower IDs from
+    # preempting the actively served ticket.
+    if current_served_id and int(current_served_id) in order_ids and int(current_served_id) in reservation_dict:
+        total_needed = int(sum(reservation_dict[int(current_served_id)]))
+        already_made = int(breads_per_customer.get(int(current_served_id), 0))
+        if already_made < total_needed:
+            await r.set(prep_state_key, f"{int(current_served_id)}:{already_made}", ex=ttl)
+            print(
+                f"Rebuilt prep_state for bakery {bakery_id}: sticky current_served {int(current_served_id)} has {already_made}/{total_needed} breads")
+            return
+
+    if current_state_customer_id and int(current_state_customer_id) in order_ids and int(current_state_customer_id) in reservation_dict:
+        total_needed = int(sum(reservation_dict[int(current_state_customer_id)]))
+        already_made = int(breads_per_customer.get(int(current_state_customer_id), 0))
+        if already_made < total_needed:
+            await r.set(prep_state_key, f"{int(current_state_customer_id)}:{already_made}", ex=ttl)
+            print(
+                f"Rebuilt prep_state for bakery {bakery_id}: customer {int(current_state_customer_id)} has {already_made}/{total_needed} breads")
+            return
+
     # Find first incomplete customer
-    for customer_id in order_ids:
-        total_needed = sum(reservation_dict[customer_id])
+    scan_order_ids = order_ids
+    if current_served_id and int(current_served_id) in order_ids:
+        scan_order_ids = [int(current_served_id)] + [cid for cid in order_ids if int(cid) != int(current_served_id)]
+
+    for customer_id in scan_order_ids:
+        if int(customer_id) not in reservation_dict:
+            continue
+        total_needed = sum(reservation_dict[int(customer_id)])
         already_made = breads_per_customer.get(customer_id, 0)
 
+        # If urgent exists and the next normal ticket has not started yet, do not
+        # preselect it as prep_state. Leaving prep_state empty lets /new_bread
+        # process urgent first.
         if already_made < total_needed:
             # This customer is still in preparation
             await r.set(prep_state_key, f"{customer_id}:{already_made}", ex=ttl)
@@ -1890,7 +1988,7 @@ async def rebuild_prep_state(r, bakery_id: int):
 
     # All customers complete - keep last customer to prevent restart
     last_customer_id = order_ids[-1]
-    last_customer_total = sum(reservation_dict[last_customer_id])
+    last_customer_total = sum(reservation_dict.get(int(last_customer_id), []))
     await r.set(prep_state_key, f"{last_customer_id}:{last_customer_total}", ex=ttl)
     print(
         f"All customers complete for bakery {bakery_id}, set prep_state to last customer {last_customer_id}:{last_customer_total}")

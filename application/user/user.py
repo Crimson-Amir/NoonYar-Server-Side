@@ -295,6 +295,7 @@ async def queue_all_ticket_summary(
     prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
     urgent_prep_key = redis_helper.REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
     base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
+    current_served_key = redis_helper.REDIS_KEY_CURRENT_SERVED.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
@@ -306,7 +307,8 @@ async def queue_all_ticket_summary(
     pipe.get(prep_state_key)
     pipe.get(urgent_prep_key)
     pipe.smembers(base_done_key)
-    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_map, served_set, all_breads, prep_state_raw, urgent_processing_raw, base_done_raw = await pipe.execute()
+    pipe.get(current_served_key)
+    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_map, served_set, all_breads, prep_state_raw, urgent_processing_raw, base_done_raw, current_served_raw = await pipe.execute()
 
     if not time_per_bread_raw:
         return {'msg': 'bakery does not exist or does not have any bread'}
@@ -346,30 +348,6 @@ async def queue_all_ticket_summary(
                 return None
         return str(v)
 
-    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(
-        r, bakery_id, {str(k): int(v) for k, v in time_per_bread_raw.items()}
-    )
-
-    current_working_ticket_id = None
-    urgent_processing_id = _as_text(urgent_processing_raw)
-    if urgent_processing_id:
-        urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(urgent_processing_id))
-        ticket_id_raw = await r.hget(urgent_item_key, "ticket_id")
-        try:
-            current_working_ticket_id = int(_as_text(ticket_id_raw)) if ticket_id_raw else None
-        except Exception:
-            current_working_ticket_id = None
-    else:
-        prep_state_str = _as_text(prep_state_raw)
-        if prep_state_str and ':' in str(prep_state_str):
-            try:
-                current_working_ticket_id = int(str(prep_state_str).split(':', 1)[0])
-            except Exception:
-                current_working_ticket_id = None
-
-    if current_working_ticket_id is not None and int(current_working_ticket_id) not in set(int(x) for x in all_ticket_ids):
-        current_working_ticket_id = None
-
     breads_per_customer = {}
     for bread_value in all_breads or []:
         bread_value = _as_text(bread_value)
@@ -383,6 +361,61 @@ async def queue_all_ticket_summary(
         breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
 
     base_done_ids = set(int(_as_text(x)) for x in (base_done_raw or []) if _as_text(x) is not None)
+
+    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(
+        r, bakery_id, {str(k): int(v) for k, v in time_per_bread_raw.items()}
+    )
+
+    current_working_ticket_id = None
+    locked_normal_ticket_id = None
+    selected_normal_ticket_id = None
+    selected_normal_bread_count = 0
+    current_served_id = 0
+
+    current_served_str = _as_text(current_served_raw)
+    if current_served_str:
+        try:
+            current_served_id = int(current_served_str)
+        except Exception:
+            current_served_id = 0
+
+    prep_state_str = _as_text(prep_state_raw)
+    if prep_state_str and ':' in str(prep_state_str):
+        try:
+            parts = str(prep_state_str).split(':', 1)
+            selected_normal_ticket_id = int(parts[0])
+            if len(parts) > 1 and str(parts[1]) != "":
+                selected_normal_bread_count = int(parts[1])
+        except Exception:
+            selected_normal_ticket_id = None
+
+    if selected_normal_ticket_id is not None:
+        base_needed_total = sum(int(x) for x in (reservation_dict.get(int(selected_normal_ticket_id)) or []))
+        baked_total = int(breads_per_customer.get(int(selected_normal_ticket_id), 0))
+        baked_total = max(int(baked_total), int(selected_normal_bread_count or 0))
+        if int(selected_normal_ticket_id) in base_done_ids:
+            baked_total = max(int(baked_total), int(base_needed_total))
+        started_normal = int(baked_total) > 0 or (
+            int(current_served_id or 0) > 0 and int(current_served_id) == int(selected_normal_ticket_id)
+        )
+        if int(base_needed_total) > 0 and baked_total < int(base_needed_total) and started_normal:
+            locked_normal_ticket_id = int(selected_normal_ticket_id)
+
+    urgent_processing_id = _as_text(urgent_processing_raw)
+    if locked_normal_ticket_id is not None:
+        current_working_ticket_id = int(locked_normal_ticket_id)
+    elif urgent_processing_id:
+        urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, str(urgent_processing_id))
+        ticket_id_raw = await r.hget(urgent_item_key, "ticket_id")
+        try:
+            current_working_ticket_id = int(_as_text(ticket_id_raw)) if ticket_id_raw else None
+        except Exception:
+            current_working_ticket_id = None
+    else:
+        current_working_ticket_id = selected_normal_ticket_id
+
+    if current_working_ticket_id is not None and int(current_working_ticket_id) not in set(int(x) for x in all_ticket_ids):
+        current_working_ticket_id = None
 
     result = {}
     for ticket_id in all_ticket_ids:
