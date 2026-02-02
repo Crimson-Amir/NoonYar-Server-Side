@@ -9,6 +9,8 @@ MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
 MQTT_UPDATE_HAS_CUSTOMER_IN_QUEUE = f"{MQTT_BAKERY_PREFIX}/has_customer_in_queue_update"
 MQTT_UPDATE_HAS_UPCOMING_CUSTOMER_IN_QUEUE = f"{MQTT_BAKERY_PREFIX}/has_upcoming_customer_in_queue_update"
 MQTT_NEW_TICKET = f"{MQTT_BAKERY_PREFIX}/new_ticket"
+MQTT_CALL_CUSTOMER = f"{MQTT_BAKERY_PREFIX}/call_customer"
+MQTT_PRINT_TICKET = f"{MQTT_BAKERY_PREFIX}/print_ticket"
 
 mqtt_connected = asyncio.Event()
 
@@ -63,3 +65,13 @@ async def update_has_upcoming_customer_in_queue(request, bakery_id, state=True):
 async def notify_new_ticket(request, bakery_id: int, ticket_id: int, token: str):
     topic = MQTT_NEW_TICKET.format(bakery_id)
     await safe_publish(request, topic, {"ticket_id": int(ticket_id), "token": str(token)})
+
+
+async def call_customer(request, bakery_id: int, ticket_id: int):
+    topic = MQTT_CALL_CUSTOMER.format(bakery_id)
+    await safe_publish(request, topic, {"ticket_id": int(ticket_id)})
+
+
+async def print_ticket(request, bakery_id: int, ticket_id: int, token: str):
+    topic = MQTT_PRINT_TICKET.format(bakery_id)
+    await safe_publish(request, topic, {"bakery_id": int(bakery_id), "ticket_id": int(ticket_id), "token": str(token)})

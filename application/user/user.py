@@ -422,7 +422,15 @@ async def queue_all_ticket_summary(
         counts = reservation_dict.get(ticket_id) or wait_list_dict.get(ticket_id)
         breads_by_name = {}
 
-        urgent_breads = urgent_by_ticket.get(int(ticket_id), {})
+        urgent_breads_raw = urgent_by_ticket.get(int(ticket_id), {})
+        urgent_breads = {}
+        for bid_raw, count in (urgent_breads_raw or {}).items():
+            try:
+                bid_int = int(bid_raw)
+            except Exception:
+                bid_int = None
+            key = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+            urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count)
 
         base_needed_total = 0
         if counts is not None:

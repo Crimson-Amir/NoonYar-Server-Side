@@ -87,6 +87,8 @@ async def new_ticket(
 
     await mqtt_client.notify_new_ticket(request, bakery_id, customer_ticket_id, customer_token)
 
+    await mqtt_client.print_ticket(request, bakery_id, customer_ticket_id, customer_token)
+
     # Telegram log: new ticket
     bread_names = await redis_helper.get_bakery_bread_names(r)
     bread_lines = []
@@ -338,9 +340,7 @@ async def current_ticket(
         if base_total <= 0:
             continue
         existing = breads_by_customer.get(int(tid), [])
-        if len(existing) >= base_total:
-            continue
-        breads_by_customer[int(tid)] = sorted(([0.0] * (base_total - len(existing))) + list(existing))
+        breads_by_customer[int(tid)] = sorted(([0.0] * base_total) + list(existing))
 
     urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
     urgent_remaining_time = await redis_helper.get_urgent_remaining_total_time(r, bakery_id, time_per_bread)
@@ -516,6 +516,8 @@ async def send_ticket_to_wait_list(
 
     # Update user-facing current ticket only when this ticket is ready to be served.
     await redis_helper.set_user_current_ticket(r, bakery_id, customer_id)
+
+    await mqtt_client.call_customer(request, bakery_id, customer_id)
     
     # Consume breads for this customer before rebuilding prep_state
     removed = await redis_helper.consume_ready_breads(r, bakery_id, customer_id)
@@ -680,6 +682,7 @@ async def current_cook_customer(
     state_customer_id = None
     state_progress = 0
     state_active = False
+    active_normal_customer_id = None
     if prep_state_str and order_ids:
         try:
             parts = str(prep_state_str).split(':', 1)
@@ -697,6 +700,7 @@ async def current_cook_customer(
         already_made = max(int(breads_per_customer.get(state_customer_id, 0)), int(state_progress or 0))
         if already_made < needed:
             state_active = True
+            active_normal_customer_id = int(state_customer_id)
         else:
             urgent_original_extra = await redis_helper.get_urgent_original_counts_for_ticket(
                 r, bakery_id, state_customer_id, time_per_bread
@@ -729,19 +733,33 @@ async def current_cook_customer(
                     "urgent_id": urgent_id,
                 }
 
-    started_normal = False
+    working_customer_preview = None
     if state_active and state_customer_id:
-        try:
-            needed = get_customer_needs(state_customer_id)
-            already_made = max(int(breads_per_customer.get(state_customer_id, 0)), int(state_progress or 0))
-            if already_made < int(needed or 0):
-                started_normal = int(already_made) > 0 or (
-                    int(current_served_id or 0) > 0 and int(current_served_id) == int(state_customer_id)
-                )
-        except Exception:
-            started_normal = False
+        working_customer_preview = int(state_customer_id)
+    elif order_ids:
+        for customer_id in order_ids:
+            if str(customer_id) not in reservations_map:
+                continue
+            try:
+                counts = list(map(int, reservations_map[str(customer_id)].split(',')))
+            except Exception:
+                counts = []
+            needed = sum(counts) if counts else 0
+            already_made = int(breads_per_customer.get(int(customer_id), 0))
+            if int(customer_id) in base_done_ids:
+                already_made = max(int(already_made), int(needed))
+            if int(already_made) < int(needed):
+                working_customer_preview = int(customer_id)
+                break
 
-    if urgent_id and time_per_bread and not started_normal:
+    can_show_urgent = False
+    if urgent_id and time_per_bread and (not active_normal_customer_id):
+        if urgent_processing_raw:
+            can_show_urgent = True
+        elif working_customer_preview is None:
+            can_show_urgent = True
+
+    if can_show_urgent:
         urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, urgent_id)
         pipe_u = r.pipeline()
         pipe_u.hget(urgent_item_key, "ticket_id")

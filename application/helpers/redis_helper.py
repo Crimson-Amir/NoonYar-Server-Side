@@ -1254,9 +1254,7 @@ async def select_best_ticket_by_ready_time(r, bakery_id: int):
         if base_total <= 0:
             continue
         existing = breads_by_customer.get(int(tid), [])
-        if len(existing) >= base_total:
-            continue
-        breads_by_customer[int(tid)] = sorted(([0.0] * (base_total - len(existing))) + list(existing))
+        breads_by_customer[int(tid)] = sorted(([0.0] * base_total) + list(existing))
 
     urgent_by_ticket = await get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
     urgent_remaining_time = await get_urgent_remaining_total_time(r, bakery_id, time_per_bread)
@@ -1570,7 +1568,7 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     for uid in ids:
         item_key = get_urgent_item_key(bakery_id, str(_as_text(uid)))
         pipe.hget(item_key, "ticket_id")
-        pipe.hget(item_key, "remaining_breads")
+        pipe.hget(item_key, "original_breads")
         pipe.hget(item_key, "status")
     rows = await pipe.execute()
 
@@ -1964,6 +1962,11 @@ async def rebuild_prep_state(r, bakery_id: int):
             print(
                 f"Rebuilt prep_state for bakery {bakery_id}: customer {int(current_state_customer_id)} has {already_made}/{total_needed} breads")
             return
+
+    if urgent_exists:
+        await r.delete(prep_state_key)
+        print(f"Rebuilt prep_state for bakery {bakery_id}: urgent exists, cleared prep_state")
+        return
 
     # Find first incomplete customer
     scan_order_ids = order_ids
