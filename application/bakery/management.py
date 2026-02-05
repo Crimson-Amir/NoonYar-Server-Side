@@ -69,7 +69,20 @@ async def urgent_inject(
             raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
 
         bread_ids_sorted = sorted(time_per_bread.keys())
-        encoded_reservation = ",".join("0" for _ in bread_ids_sorted)
+        bread_counts_db = {int(b.bread_type_id): int(b.count) for b in (customer.bread_associations or [])}
+        encoded_reservation_db = ",".join(
+            str(int(bread_counts_db.get(int(bid), 0)))
+            for bid in bread_ids_sorted
+        )
+
+        def _is_all_zeros(reservation_str) -> bool:
+            if not reservation_str:
+                return False
+            try:
+                parts = [p for p in str(reservation_str).split(",") if str(p) != ""]
+                return bool(parts) and all(int(x) == 0 for x in parts)
+            except Exception:
+                return False
 
         res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
         order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
@@ -78,17 +91,27 @@ async def urgent_inject(
         base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
         ttl = seconds_until_midnight_iran()
 
-        in_queue = await r.hexists(res_key, str(ticket_id))
+        pipe_check = r.pipeline()
+        pipe_check.hexists(res_key, str(ticket_id))
+        pipe_check.hget(res_key, str(ticket_id))
+        pipe_check.hget(wait_list_key, str(ticket_id))
+        pipe_check.sismember(base_done_key, str(ticket_id))
+        in_queue, existing_reservation, wait_list_reservation, is_base_done = await pipe_check.execute()
 
-        wait_list_reservation = await r.hget(wait_list_key, str(ticket_id))
-        if (not in_queue) and wait_list_reservation:
-            encoded_reservation = str(wait_list_reservation)
+        effective_reservation = None
+        if wait_list_reservation and (not _is_all_zeros(wait_list_reservation)):
+            effective_reservation = str(wait_list_reservation)
+        elif existing_reservation and (not _is_all_zeros(existing_reservation)):
+            effective_reservation = str(existing_reservation)
+        else:
+            effective_reservation = str(encoded_reservation_db)
 
         pipe = r.pipeline(transaction=True)
         pipe.srem(served_key, int(ticket_id))
         pipe.hdel(wait_list_key, str(ticket_id))
-        if not in_queue:
-            pipe.hset(res_key, str(ticket_id), encoded_reservation)
+        if effective_reservation is not None:
+            pipe.hset(res_key, str(ticket_id), effective_reservation)
+        if bool(wait_list_reservation) or bool(is_base_done):
             pipe.sadd(base_done_key, str(ticket_id))
         pipe.zadd(order_key, {str(ticket_id): int(ticket_id)})
         pipe.expire(res_key, ttl)
@@ -612,13 +635,22 @@ async def remove_ticket(
 
     for num in numbers_to_free:
         queue_state.tickets.pop(int(num), None)
-        if int(num) > queue_state.current_served:
-            queue_state.slots_for_singles.add(int(num))
-            queue_state.slots_for_multis.add(int(num))
+        queue_state.slots_for_singles.discard(int(num))
+        queue_state.slots_for_multis.discard(int(num))
 
     await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
     crud.delete_customer_by_ticket_id_today(db, bakery_id, customer_ticket_id)
+
+    try:
+        await redis_helper.cleanup_urgent_items_for_ticket(
+            r,
+            bakery_id,
+            int(customer_ticket_id),
+            statuses=("DONE", "PENDING", "PROCESSING"),
+        )
+    except Exception:
+        pass
 
     await redis_helper.get_bakery_reservations(
         r,
@@ -637,7 +669,7 @@ async def remove_ticket(
     logger.info(f"{FILE_NAME}:remove_ticket", extra={
         "bakery_id": bakery_id,
         "customer_ticket_id": customer_ticket_id,
-        "freed_numbers": sorted(list(numbers_to_free)),
+        "blocked_numbers": sorted(list(numbers_to_free)),
         "removed_breads": len(to_remove_breads),
     })
 
@@ -645,6 +677,7 @@ async def remove_ticket(
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
         "freed_numbers": sorted(list(numbers_to_free)),
+        "blocked_numbers": sorted(list(numbers_to_free)),
     }
 
 

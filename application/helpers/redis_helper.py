@@ -6,6 +6,7 @@ import json
 import uuid
 import time
 from collections import defaultdict
+from typing import Optional
 
 
 REDIS_KEY_PREFIX = "bakery:{0}"
@@ -42,6 +43,23 @@ REDIS_KEY_BASE_DONE = f"{REDIS_KEY_PREFIX}:base_done"
 
 def get_urgent_item_key(bakery_id: int, urgent_id: str) -> str:
     return f"bakery:{bakery_id}:urgent_item:{urgent_id}"
+
+
+def _normalize_redis_id(v) -> Optional[str]:
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            s = v.decode()
+        except Exception:
+            s = str(v)
+    else:
+        s = str(v)
+    if s.startswith("b'") and s.endswith("'") and len(s) >= 3:
+        return s[2:-1]
+    if s.startswith('b"') and s.endswith('"') and len(s) >= 3:
+        return s[2:-1]
+    return s
 
 async def get_bakery_runtime_state(r, bakery_id):
     time_key = REDIS_KEY_TIME_PER_BREAD.format(bakery_id)
@@ -1409,11 +1427,19 @@ async def start_next_urgent_for_ticket_if_available(r, bakery_id: int, ticket_id
 
     existing = await r.get(prep_key)
     if existing:
-        item_key = get_urgent_item_key(bakery_id, str(existing))
+        existing_id = _normalize_redis_id(existing)
+        if not existing_id:
+            return None
+
+        item_key = get_urgent_item_key(bakery_id, str(existing_id))
         existing_tid = await r.hget(item_key, "ticket_id")
         try:
-            if existing_tid is not None and int(existing_tid) == int(ticket_id):
-                return str(existing)
+            if existing_tid is not None:
+                existing_tid_txt = existing_tid.decode() if isinstance(existing_tid, (bytes, bytearray)) else str(existing_tid)
+            else:
+                existing_tid_txt = None
+            if existing_tid_txt is not None and existing_tid_txt != "" and int(existing_tid_txt) == int(ticket_id):
+                return str(existing_id)
         except Exception:
             return None
         return None
@@ -1424,7 +1450,10 @@ async def start_next_urgent_for_ticket_if_available(r, bakery_id: int, ticket_id
 
     pipe = r.pipeline()
     for uid in urgent_ids:
-        item_key = get_urgent_item_key(bakery_id, str(uid))
+        uid_txt = _normalize_redis_id(uid)
+        if not uid_txt:
+            continue
+        item_key = get_urgent_item_key(bakery_id, str(uid_txt))
         pipe.hget(item_key, "status")
         pipe.hget(item_key, "ticket_id")
     raw = await pipe.execute()
@@ -1433,14 +1462,21 @@ async def start_next_urgent_for_ticket_if_available(r, bakery_id: int, ticket_id
     for idx, uid in enumerate(urgent_ids):
         status = raw[idx * 2]
         tid = raw[idx * 2 + 1]
-        if status != "PENDING":
+        try:
+            status_txt = status.decode() if isinstance(status, (bytes, bytearray)) else str(status)
+        except Exception:
+            status_txt = str(status)
+        if status_txt != "PENDING":
             continue
         try:
-            if tid is None or int(tid) != int(ticket_id):
+            tid_txt = tid.decode() if isinstance(tid, (bytes, bytearray)) else str(tid)
+            if tid_txt is None or tid_txt == "" or int(tid_txt) != int(ticket_id):
                 continue
         except Exception:
             continue
-        chosen_id = str(uid)
+        chosen_id = _normalize_redis_id(uid)
+        if not chosen_id:
+            continue
         break
 
     if not chosen_id:
@@ -1471,13 +1507,16 @@ async def start_next_urgent_if_available(r, bakery_id: int):
 
     existing = await r.get(prep_key)
     if existing:
-        return str(existing)
+        existing_id = _normalize_redis_id(existing)
+        return str(existing_id) if existing_id else None
 
     next_id = await r.zrange(queue_key, 0, 0)
     if not next_id:
         return None
 
-    urgent_id = str(next_id[0])
+    urgent_id = _normalize_redis_id(next_id[0])
+    if not urgent_id:
+        return None
     item_key = get_urgent_item_key(bakery_id, urgent_id)
 
     pipe = r.pipeline(transaction=True)
@@ -1496,7 +1535,7 @@ async def list_urgent_items(r, bakery_id: int):
     processing_raw = await r.get(prep_key)
     processing_id = None
     if processing_raw:
-        processing_id = str(processing_raw)
+        processing_id = _normalize_redis_id(processing_raw)
 
     ids = list(urgent_ids)
     if processing_id and processing_id not in ids:
@@ -1507,7 +1546,10 @@ async def list_urgent_items(r, bakery_id: int):
 
     pipe = r.pipeline()
     for uid in ids:
-        pipe.hgetall(get_urgent_item_key(bakery_id, str(uid)))
+        uid_txt = _normalize_redis_id(uid)
+        if not uid_txt:
+            continue
+        pipe.hgetall(get_urgent_item_key(bakery_id, str(uid_txt)))
     rows = await pipe.execute()
 
     items = []
@@ -1525,7 +1567,7 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     Uses urgent items' `original_breads` so the injected quantity remains stable
     during baking (similar to how normal ticket breads are shown).
 
-    Includes PENDING/PROCESSING/DONE items.
+    Includes PENDING/PROCESSING items.
     """
     if not time_per_bread:
         return {}
@@ -1552,32 +1594,50 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     urgent_ids, processing_raw, all_ids = await pipe0.execute()
 
     ids = list(all_ids or [])
-    if urgent_ids:
-        for uid in urgent_ids:
-            if uid not in ids:
-                ids.append(uid)
-    if processing_raw:
-        pid = _as_text(processing_raw)
-        if pid and pid not in ids:
-            ids.append(pid)
+    for uid in (urgent_ids or []):
+        if uid not in ids:
+            ids.append(uid)
+    if processing_raw and processing_raw not in ids:
+        ids.append(processing_raw)
 
-    if not ids:
+    normalized_ids = []
+    seen = set()
+    for uid in ids:
+        uid_txt = _normalize_redis_id(_as_text(uid))
+        if not uid_txt:
+            continue
+        if uid_txt in seen:
+            continue
+        seen.add(uid_txt)
+        normalized_ids.append(uid_txt)
+
+    if not normalized_ids:
         return {}
 
     pipe = r.pipeline()
-    for uid in ids:
-        item_key = get_urgent_item_key(bakery_id, str(_as_text(uid)))
+    for uid_txt in normalized_ids:
+        item_key = get_urgent_item_key(bakery_id, str(uid_txt))
         pipe.hget(item_key, "ticket_id")
         pipe.hget(item_key, "original_breads")
         pipe.hget(item_key, "status")
+        pipe.hget(item_key, "remaining_breads")
     rows = await pipe.execute()
 
     out: dict[int, dict[str, int]] = {}
-    for i in range(0, len(rows), 3):
-        ticket_id_raw, original_raw, status_raw = rows[i], rows[i + 1], rows[i + 2]
+    for i in range(0, len(rows), 4):
+        ticket_id_raw, original_raw, status_raw, remaining_raw = rows[i], rows[i + 1], rows[i + 2], rows[i + 3]
         status = _as_text(status_raw)
         if status not in ("PENDING", "PROCESSING", "DONE"):
             continue
+
+        if status in ("PENDING", "PROCESSING"):
+            remaining_counts = _decode_counts(_as_text(remaining_raw) or "")
+            if len(remaining_counts) < len(bread_ids_sorted):
+                remaining_counts = remaining_counts + [0] * (len(bread_ids_sorted) - len(remaining_counts))
+            remaining_total = int(sum(int(x) for x in remaining_counts[: len(bread_ids_sorted)]))
+            if remaining_total <= 0:
+                # Defensive: do not keep counting stale urgent items whose status was not cleaned up.
+                continue
 
         ticket_id_txt = _as_text(ticket_id_raw)
         if not ticket_id_txt:
@@ -1600,10 +1660,99 @@ async def get_urgent_breads_by_ticket(r, bakery_id: int, time_per_bread: dict) -
     return out
 
 
+async def cleanup_urgent_items_for_ticket(r, bakery_id: int, ticket_id: int, statuses=("DONE",)) -> int:
+    queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
+    prep_key = REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+    all_key = REDIS_KEY_URGENT_ALL_IDS.format(bakery_id)
+
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode()
+            except Exception:
+                return None
+        return str(v)
+
+    pipe0 = r.pipeline()
+    pipe0.smembers(all_key)
+    pipe0.zrange(queue_key, 0, -1)
+    pipe0.get(prep_key)
+    all_ids, urgent_ids, processing_raw = await pipe0.execute()
+
+    ids = list(all_ids or [])
+    for uid in (urgent_ids or []):
+        if uid not in ids:
+            ids.append(uid)
+    if processing_raw and processing_raw not in ids:
+        ids.append(processing_raw)
+
+    normalized_ids = []
+    seen = set()
+    for uid in ids:
+        uid_txt = _normalize_redis_id(_as_text(uid))
+        if not uid_txt:
+            continue
+        if uid_txt in seen:
+            continue
+        seen.add(uid_txt)
+        normalized_ids.append(uid_txt)
+
+    if not normalized_ids:
+        return 0
+
+    pipe = r.pipeline()
+    for uid_txt in normalized_ids:
+        item_key = get_urgent_item_key(bakery_id, str(uid_txt))
+        pipe.hget(item_key, "status")
+        pipe.hget(item_key, "ticket_id")
+    raw = await pipe.execute()
+
+    wanted = []
+    for idx, uid_txt in enumerate(normalized_ids):
+        status_raw = raw[idx * 2]
+        tid_raw = raw[idx * 2 + 1]
+        status_txt = _as_text(status_raw)
+        if status_txt is None or str(status_txt) not in set(str(x) for x in (statuses or [])):
+            continue
+        tid_txt = _as_text(tid_raw)
+        if not tid_txt:
+            continue
+        try:
+            if int(tid_txt) != int(ticket_id):
+                continue
+        except Exception:
+            continue
+        wanted.append(str(uid_txt))
+
+    if not wanted:
+        return 0
+
+    processing_id = _normalize_redis_id(_as_text(processing_raw))
+    ttl = seconds_until_midnight_iran()
+
+    pipe2 = r.pipeline(transaction=True)
+    for uid_txt in wanted:
+        pipe2.srem(all_key, uid_txt)
+        pipe2.zrem(queue_key, uid_txt)
+        pipe2.delete(get_urgent_item_key(bakery_id, str(uid_txt)))
+    if processing_id and str(processing_id) in set(str(x) for x in wanted):
+        pipe2.delete(prep_key)
+    pipe2.expire(all_key, ttl)
+    pipe2.expire(queue_key, ttl)
+    await pipe2.execute()
+    return int(len(wanted))
+
+
 async def update_urgent_item_if_pending(r, bakery_id: int, urgent_id: str, bread_requirements: dict, time_per_bread: dict) -> bool:
     item_key = get_urgent_item_key(bakery_id, urgent_id)
     status = await r.hget(item_key, "status")
-    if status != "PENDING":
+    try:
+        status_txt = status.decode() if isinstance(status, (bytes, bytearray)) else str(status)
+    except Exception:
+        status_txt = str(status)
+    if status_txt != "PENDING":
         return False
 
     bread_ids_sorted = sorted(time_per_bread.keys())
@@ -1620,7 +1769,11 @@ async def update_urgent_item_if_pending(r, bakery_id: int, urgent_id: str, bread
 async def delete_urgent_item_if_pending(r, bakery_id: int, urgent_id: str) -> bool:
     item_key = get_urgent_item_key(bakery_id, urgent_id)
     status = await r.hget(item_key, "status")
-    if status != "PENDING":
+    try:
+        status_txt = status.decode() if isinstance(status, (bytes, bytearray)) else str(status)
+    except Exception:
+        status_txt = str(status)
+    if status_txt != "PENDING":
         return False
 
     queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
@@ -1634,6 +1787,11 @@ async def delete_urgent_item_if_pending(r, bakery_id: int, urgent_id: str) -> bo
 def _decode_counts(encoded: str) -> list[int]:
     if not encoded:
         return []
+    if isinstance(encoded, (bytes, bytearray)):
+        try:
+            encoded = encoded.decode()
+        except Exception:
+            encoded = str(encoded)
     return [int(x) for x in str(encoded).split(",") if str(x) != ""]
 
 
@@ -1651,7 +1809,9 @@ async def consume_one_urgent_bread(r, bakery_id: int, time_per_bread: dict):
     if not urgent_id_raw:
         return None
 
-    urgent_id = str(urgent_id_raw)
+    urgent_id = _normalize_redis_id(urgent_id_raw)
+    if not urgent_id:
+        return None
     item_key = get_urgent_item_key(bakery_id, urgent_id)
 
     pipe0 = r.pipeline()
@@ -1699,7 +1859,7 @@ async def consume_one_urgent_bread(r, bakery_id: int, time_per_bread: dict):
     return {
         "urgent": True,
         "urgent_id": urgent_id,
-        "ticket_id": int(ticket_id_raw) if ticket_id_raw else None,
+        "ticket_id": int(ticket_id_raw.decode() if isinstance(ticket_id_raw, (bytes, bytearray)) else ticket_id_raw) if ticket_id_raw else None,
         "remaining_total": int(remaining_total),
         "remaining_by_type": remaining_by_type,
         "done": remaining_total <= 0,
@@ -1714,15 +1874,20 @@ async def get_urgent_remaining_total_time(r, bakery_id: int, time_per_bread: dic
     processing_id = await r.get(prep_key)
 
     ids = list(urgent_ids)
-    if processing_id and str(processing_id) not in ids:
-        ids.append(str(processing_id))
+    pid = _normalize_redis_id(processing_id)
+    ids_txt = [(_normalize_redis_id(x) or "") for x in ids]
+    if pid and pid not in ids_txt:
+        ids.append(pid)
 
     if not ids:
         return 0
 
     pipe = r.pipeline()
     for uid in ids:
-        item_key = get_urgent_item_key(bakery_id, str(uid))
+        uid_txt = _normalize_redis_id(uid)
+        if not uid_txt:
+            continue
+        item_key = get_urgent_item_key(bakery_id, str(uid_txt))
         pipe.hget(item_key, "status")
         pipe.hget(item_key, "remaining_breads")
     raw = await pipe.execute()
@@ -1732,7 +1897,11 @@ async def get_urgent_remaining_total_time(r, bakery_id: int, time_per_bread: dic
     for i in range(0, len(raw), 2):
         status = raw[i]
         remaining = raw[i + 1]
-        if status not in ("PENDING", "PROCESSING"):
+        try:
+            status_txt = status.decode() if isinstance(status, (bytes, bytearray)) else str(status)
+        except Exception:
+            status_txt = str(status)
+        if status_txt not in ("PENDING", "PROCESSING"):
             continue
         counts = _decode_counts(remaining)
         for bid, count in zip(bread_ids_sorted, counts):
@@ -1746,30 +1915,72 @@ async def get_urgent_original_counts_for_ticket(r, bakery_id: int, ticket_id: in
     urgent_ids = await r.zrange(queue_key, 0, -1)
     processing_id = await r.get(prep_key)
 
-    ids = list(urgent_ids)
-    if processing_id and str(processing_id) not in ids:
-        ids.append(str(processing_id))
+    def _as_text(v):
+        if v is None:
+            return None
+        if isinstance(v, (bytes, bytearray)):
+            try:
+                return v.decode()
+            except Exception:
+                return None
+        return str(v)
 
-    if not ids:
+    ids = list(urgent_ids)
+    pid = _normalize_redis_id(_as_text(processing_id))
+
+    normalized_ids = []
+    seen = set()
+    for uid in ids:
+        uid_txt = _normalize_redis_id(_as_text(uid))
+        if not uid_txt:
+            continue
+        if uid_txt in seen:
+            continue
+        seen.add(uid_txt)
+        normalized_ids.append(uid_txt)
+    if pid and pid not in seen:
+        normalized_ids.append(pid)
+
+    if not normalized_ids:
         return {}
 
     pipe = r.pipeline()
-    for uid in ids:
-        item_key = get_urgent_item_key(bakery_id, str(uid))
+    for uid_txt in normalized_ids:
+        item_key = get_urgent_item_key(bakery_id, str(uid_txt))
         pipe.hget(item_key, "status")
         pipe.hget(item_key, "ticket_id")
         pipe.hget(item_key, "original_breads")
+        pipe.hget(item_key, "remaining_breads")
     raw = await pipe.execute()
 
     bread_ids_sorted = sorted(time_per_bread.keys())
     result = {bid: 0 for bid in bread_ids_sorted}
-    for i in range(0, len(raw), 3):
+    for i in range(0, len(raw), 4):
         status = raw[i]
         tid = raw[i + 1]
         original = raw[i + 2]
-        if status not in ("PENDING", "PROCESSING"):
+        remaining = raw[i + 3]
+
+        status_txt = None
+        try:
+            status_txt = status.decode() if isinstance(status, (bytes, bytearray)) else str(status)
+        except Exception:
+            status_txt = str(status)
+        if status_txt not in ("PENDING", "PROCESSING"):
             continue
-        if not tid or int(tid) != int(ticket_id):
+
+        remaining_counts = _decode_counts(remaining)
+        if len(remaining_counts) < len(bread_ids_sorted):
+            remaining_counts = remaining_counts + [0] * (len(bread_ids_sorted) - len(remaining_counts))
+        remaining_total = int(sum(int(x) for x in remaining_counts[: len(bread_ids_sorted)]))
+        if remaining_total <= 0:
+            continue
+
+        try:
+            tid_txt = tid.decode() if isinstance(tid, (bytes, bytearray)) else str(tid)
+        except Exception:
+            tid_txt = str(tid)
+        if not tid_txt or int(tid_txt) != int(ticket_id):
             continue
         counts = _decode_counts(original)
         for bid, count in zip(bread_ids_sorted, counts):

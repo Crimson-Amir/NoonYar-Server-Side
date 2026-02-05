@@ -459,10 +459,10 @@ async def queue_all_ticket_summary(
             status = "TICKET_IS_SERVED"
         elif ticket_id in wait_list_ids:
             status = "TICKET_IS_IN_WAIT_LIST"
-        elif current_working_ticket_id is not None and int(ticket_id) == int(current_working_ticket_id):
-            status = "CURRENTLY_WORKING"
         elif baked_total >= max(int(needed_total), 0) and int(needed_total) > 0:
             status = "ALL_BREADS_PREPARED"
+        elif current_working_ticket_id is not None and int(ticket_id) == int(current_working_ticket_id):
+            status = "CURRENTLY_WORKING"
         else:
             status = "IN_QUEUE"
 
