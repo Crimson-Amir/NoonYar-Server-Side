@@ -56,7 +56,7 @@ def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID):
         url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
         json=json_data,
         timeout=10,
-        proxies=proxies,
+        # proxies=proxies,
     )
     response.raise_for_status()
 
@@ -176,6 +176,7 @@ def auto_dispatch_ready_tickets(self):
 
             for bakery in bakeries or []:
                 bakery_id = int(getattr(bakery, "bakery_id", bakery))
+                await redis_helper.rebuild_prep_state(r, bakery_id)
                 lock_key = f"bakery:{bakery_id}:auto_dispatch_lock"
                 lock_token = uuid4().hex
                 acquired = await r.set(lock_key, lock_token, nx=True, ex=10)

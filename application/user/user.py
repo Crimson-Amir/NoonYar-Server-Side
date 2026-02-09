@@ -354,16 +354,22 @@ async def queue_all_ticket_summary(
         if not bread_value or ':' not in bread_value:
             continue
         try:
-            _, cid_str = bread_value.split(':', 1)
-            cid = int(cid_str)
+            parts = str(bread_value).split(':')
+            if len(parts) < 2:
+                continue
+            cid = int(parts[-1])
         except Exception:
             continue
         breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
 
     base_done_ids = set(int(_as_text(x)) for x in (base_done_raw or []) if _as_text(x) is not None)
 
-    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(
+    urgent_active_by_ticket = await redis_helper.get_urgent_breads_by_ticket(
         r, bakery_id, {str(k): int(v) for k, v in time_per_bread_raw.items()}
+    )
+
+    urgent_history_by_ticket = await redis_helper.get_urgent_history_by_ticket_ids(
+        r, bakery_id, [int(x) for x in all_ticket_ids]
     )
 
     current_working_ticket_id = None
@@ -422,15 +428,21 @@ async def queue_all_ticket_summary(
         counts = reservation_dict.get(ticket_id) or wait_list_dict.get(ticket_id)
         breads_by_name = {}
 
-        urgent_breads_raw = urgent_by_ticket.get(int(ticket_id), {})
+        urgent_breads_raw = urgent_history_by_ticket.get(int(ticket_id), {})
         urgent_breads = {}
         for bid_raw, count in (urgent_breads_raw or {}).items():
             try:
                 bid_int = int(bid_raw)
             except Exception:
                 bid_int = None
+            try:
+                count_int = int(count)
+            except Exception:
+                count_int = 0
+            if count_int <= 0:
+                continue
             key = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
-            urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count)
+            urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count_int)
 
         base_needed_total = 0
         if counts is not None:
@@ -446,8 +458,9 @@ async def queue_all_ticket_summary(
             base_needed_total = sum(int(v) for v in bread_counts.values())
 
         urgent_needed_total = 0
-        if urgent_breads:
-            urgent_needed_total = sum(int(v) for v in urgent_breads.values())
+        urgent_active_raw = urgent_active_by_ticket.get(int(ticket_id), {})
+        if urgent_active_raw:
+            urgent_needed_total = sum(int(v) for v in urgent_active_raw.values())
 
         needed_total = int(base_needed_total) + int(urgent_needed_total)
 

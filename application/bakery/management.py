@@ -462,12 +462,16 @@ async def modify_ticket(
     breads_per_customer = {}
     for bread_value in all_breads:
         bread_value = _as_text(bread_value)
-        if bread_value and ':' in bread_value:
-            try:
-                cid = int(bread_value.split(':')[1])
-            except Exception:
+        if not bread_value or ':' not in bread_value:
+            continue
+        try:
+            parts = str(bread_value).split(':')
+            if len(parts) < 2:
                 continue
-            breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
+            cid = int(parts[-1])
+        except Exception:
+            continue
+        breads_per_customer[cid] = breads_per_customer.get(cid, 0) + 1
 
     def _get_customer_needs(ticket_id: int):
         if not ticket_id or str(ticket_id) not in reservations_map:
