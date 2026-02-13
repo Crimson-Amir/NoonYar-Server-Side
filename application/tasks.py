@@ -2,7 +2,7 @@ import functools, requests
 import json
 from application import crud
 from celery import Celery
-from datetime import datetime, timedelta
+from datetime import datetime
 from pytz import UTC
 from application.logger_config import celery_logger
 from application.database import SessionLocal
@@ -21,13 +21,6 @@ celery_app = Celery(
     backend=None
 )
 
-celery_app.conf.beat_schedule = {
-    **(celery_app.conf.beat_schedule or {}),
-    "auto_dispatch_ready_tickets": {
-        "task": "application.tasks.auto_dispatch_ready_tickets",
-        "schedule": timedelta(seconds=5),
-    },
-}
 
 @contextmanager
 def session_scope():
@@ -162,9 +155,19 @@ def send_otp(self, mobile_number, code, expire_m=10):
                 "message_id": response_json["data"]["messageId"], "code": code}
 
 
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
-def auto_dispatch_ready_tickets(self):
+def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
+    """Schedule a one-shot auto-dispatch check using Celery countdown."""
+    delay = max(0, int(countdown_s or 0))
+    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
+
+
+@celery_app.task(bind=True)
+@handle_task_errors
+def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
     async def _task():
         r = aioredis.from_url(
             settings.REDIS_URL,
@@ -174,8 +177,14 @@ def auto_dispatch_ready_tickets(self):
             with SessionLocal() as session:
                 bakeries = crud.get_all_active_bakeries(session)
 
-            for bakery in bakeries or []:
-                bakery_id = int(getattr(bakery, "bakery_id", bakery))
+            target_bakery_ids = []
+            if bakery_id is not None:
+                target_bakery_ids = [int(bakery_id)]
+            else:
+                for bakery in bakeries or []:
+                    target_bakery_ids.append(int(getattr(bakery, "bakery_id", bakery)))
+
+            for bakery_id in target_bakery_ids:
                 await redis_helper.rebuild_prep_state(r, bakery_id)
                 lock_key = f"bakery:{bakery_id}:auto_dispatch_lock"
                 lock_token = uuid4().hex

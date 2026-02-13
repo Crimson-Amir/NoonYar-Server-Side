@@ -16,10 +16,8 @@ class Algorithm:
         # Load full BakeryQueueState from Redis
         queue_state: BakeryQueueState = await redis_helper.load_queue_state(r, bakery_id)
 
-        # Enforce bread-based current_served: use the higher of
-        # - current_served already in queue_state (from previous calls)
-        # - current_served derived from breads/prep_state in Redis
-        _, _, _, _, _, redis_current_served = await redis_helper.get_slots_state(r, bakery_id)
+        # Keep queue cutoff aligned with bread progress persisted in Redis.
+        redis_current_served = await redis_helper.get_effective_current_served(r, bakery_id)
         if redis_current_served > queue_state.current_served:
             queue_state.current_served = redis_current_served
 
