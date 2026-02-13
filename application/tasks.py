@@ -2,7 +2,7 @@ import functools, requests
 import json
 from application import crud
 from celery import Celery
-from datetime import datetime, timedelta
+from datetime import datetime
 from pytz import UTC
 from application.logger_config import celery_logger
 from application.database import SessionLocal
@@ -21,13 +21,6 @@ celery_app = Celery(
     backend=None
 )
 
-celery_app.conf.beat_schedule = {
-    **(celery_app.conf.beat_schedule or {}),
-    "auto_dispatch_ready_tickets": {
-        "task": "application.tasks.auto_dispatch_ready_tickets",
-        "schedule": timedelta(seconds=5),
-    },
-}
 
 @contextmanager
 def session_scope():
@@ -162,9 +155,21 @@ def send_otp(self, mobile_number, code, expire_m=10):
                 "message_id": response_json["data"]["messageId"], "code": code}
 
 
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
-def auto_dispatch_ready_tickets(self):
+def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
+    """Schedule a one-shot auto-dispatch check using Celery countdown."""
+    delay = max(0, int(countdown_s or 0))
+    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
+
+
+@celery_app.task(bind=True)
+@handle_task_errors
+def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
+    target_bakery_id = bakery_id
+
     async def _task():
         r = aioredis.from_url(
             settings.REDIS_URL,
@@ -174,24 +179,30 @@ def auto_dispatch_ready_tickets(self):
             with SessionLocal() as session:
                 bakeries = crud.get_all_active_bakeries(session)
 
-            for bakery in bakeries or []:
-                bakery_id = int(getattr(bakery, "bakery_id", bakery))
-                await redis_helper.rebuild_prep_state(r, bakery_id)
-                lock_key = f"bakery:{bakery_id}:auto_dispatch_lock"
+            target_bakery_ids = []
+            if target_bakery_id is not None:
+                target_bakery_ids = [int(target_bakery_id)]
+            else:
+                for bakery in bakeries or []:
+                    target_bakery_ids.append(int(getattr(bakery, "bakery_id", bakery)))
+
+            for current_bakery_id in target_bakery_ids:
+                await redis_helper.rebuild_prep_state(r, current_bakery_id)
+                lock_key = f"bakery:{current_bakery_id}:auto_dispatch_lock"
                 lock_token = uuid4().hex
                 acquired = await r.set(lock_key, lock_token, nx=True, ex=10)
                 if not acquired:
                     continue
 
                 try:
-                    best = await redis_helper.select_best_ticket_by_ready_time(r, bakery_id)
+                    best = await redis_helper.select_best_ticket_by_ready_time(r, current_bakery_id)
                     if not best or not bool(best.get("ready")):
                         continue
 
                     ticket_id = int(best["ticket_id"])
 
-                    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-                    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+                    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(current_bakery_id)
+                    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(current_bakery_id)
 
                     pipe = r.pipeline()
                     pipe.hget(res_key, str(ticket_id))
@@ -201,42 +212,42 @@ def auto_dispatch_ready_tickets(self):
 
                     if not bool(r1 and r2):
                         reservation_list = await redis_helper.get_bakery_reservations(
-                            r, bakery_id, fetch_from_redis_first=False
+                            r, current_bakery_id, fetch_from_redis_first=False
                         )
                         if not reservation_list:
                             continue
                         status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(
-                            r, bakery_id, ticket_id
+                            r, current_bakery_id, ticket_id
                         )
                         if not status:
                             continue
 
-                    queue_state = await redis_helper.load_queue_state(r, bakery_id)
+                    queue_state = await redis_helper.load_queue_state(r, current_bakery_id)
                     queue_state.mark_ticket_served(ticket_id)
-                    await redis_helper.save_queue_state(r, bakery_id, queue_state)
+                    await redis_helper.save_queue_state(r, current_bakery_id, queue_state)
 
                     await redis_helper.add_customer_to_wait_list(
-                        r, bakery_id, ticket_id, reservations_str=current_customer_reservation
+                        r, current_bakery_id, ticket_id, reservations_str=current_customer_reservation
                     )
-                    await redis_helper.set_user_current_ticket(r, bakery_id, ticket_id)
-                    await redis_helper.consume_ready_breads(r, bakery_id, ticket_id)
-                    await redis_helper.rebuild_prep_state(r, bakery_id)
+                    await redis_helper.set_user_current_ticket(r, current_bakery_id, ticket_id)
+                    await redis_helper.consume_ready_breads(r, current_bakery_id, ticket_id)
+                    await redis_helper.rebuild_prep_state(r, current_bakery_id)
 
                     next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(
-                        r, bakery_id
+                        r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, bakery_id)
+                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id)
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
-                        await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, ticket_id)
-                        remove_customer_from_upcoming_customers.delay(ticket_id, bakery_id)
+                        await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
+                        remove_customer_from_upcoming_customers.delay(ticket_id, current_bakery_id)
 
                     with SessionLocal() as db:
-                        crud.consume_breads_for_customer_today(db, bakery_id, ticket_id)
+                        crud.consume_breads_for_customer_today(db, current_bakery_id, ticket_id)
 
                     msg = (
-                        f"Bakery ID: {bakery_id}"
+                        f"Bakery ID: {current_bakery_id}"
                         f"\nTicket Number: {ticket_id}"
                         f"\nAction: auto-dispatch to wait list"
                     )
