@@ -129,30 +129,30 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def send_otp(self, mobile_number, code, expire_m=10):
-    # url = f"https://api.sms.ir/v1/send/verify"
-    # data = {
-    #     "mobile": str(mobile_number),
-    #     "templateId": "123456",
-    #     "parameters": [{"name": "code", "value": str(code)}]
-    # }
-    # headers = {
-    #     "ACCEPT": "application/json",
-    #     "X-API-KEY": settings.SMS_KEY
-    # }
-    # response = requests.post(url, json=data, headers=headers, timeout=10)
-    # if response.status_code == 200:
-    r = redis.from_url(
-        settings.REDIS_URL,
-        decode_responses=True
-    )
-    try:
-        otp_store = OTPStore(r)
-        otp_store.set_otp(mobile_number, code, expire_m * 60)
-    finally:
-        r.close()
-        # response_json = response.json()
-        # return {"status": response_json['status'], "message": "OTP sent successfully",
-        #         "message_id": response_json["data"]["messageId"], "code": code}
+    url = f"https://api.sms.ir/v1/send/verify"
+    data = {
+        "mobile": str(mobile_number),
+        "templateId": "123456",
+        "parameters": [{"name": "code", "value": str(code)}]
+    }
+    headers = {
+        "ACCEPT": "application/json",
+        "X-API-KEY": settings.SMS_KEY
+    }
+    response = requests.post(url, json=data, headers=headers, timeout=10)
+    if response.status_code == 200:
+        r = redis.from_url(
+            settings.REDIS_URL,
+            decode_responses=True
+        )
+        try:
+            otp_store = OTPStore(r)
+            otp_store.set_otp(mobile_number, code, expire_m * 60)
+        finally:
+            r.close()
+        response_json = response.json()
+        return {"status": response_json['status'], "message": "OTP sent successfully",
+                "message_id": response_json["data"]["messageId"], "code": code}
 
 
 
@@ -193,14 +193,14 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                     continue
 
                 try:
-                    best = await redis_helper.select_best_ticket_by_ready_time(r, bakery_id)
+                    best = await redis_helper.select_best_ticket_by_ready_time(r, current_bakery_id)
                     if not best or not bool(best.get("ready")):
                         continue
 
                     ticket_id = int(best["ticket_id"])
 
-                    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-                    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+                    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(current_bakery_id)
+                    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(current_bakery_id)
 
                     pipe = r.pipeline()
                     pipe.hget(res_key, str(ticket_id))
@@ -210,42 +210,42 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
 
                     if not bool(r1 and r2):
                         reservation_list = await redis_helper.get_bakery_reservations(
-                            r, bakery_id, fetch_from_redis_first=False
+                            r, current_bakery_id, fetch_from_redis_first=False
                         )
                         if not reservation_list:
                             continue
                         status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(
-                            r, bakery_id, ticket_id
+                            r, current_bakery_id, ticket_id
                         )
                         if not status:
                             continue
 
-                    queue_state = await redis_helper.load_queue_state(r, bakery_id)
+                    queue_state = await redis_helper.load_queue_state(r, current_bakery_id)
                     queue_state.mark_ticket_served(ticket_id)
-                    await redis_helper.save_queue_state(r, bakery_id, queue_state)
+                    await redis_helper.save_queue_state(r, current_bakery_id, queue_state)
 
                     await redis_helper.add_customer_to_wait_list(
-                        r, bakery_id, ticket_id, reservations_str=current_customer_reservation
+                        r, current_bakery_id, ticket_id, reservations_str=current_customer_reservation
                     )
-                    await redis_helper.set_user_current_ticket(r, bakery_id, ticket_id)
-                    await redis_helper.consume_ready_breads(r, bakery_id, ticket_id)
-                    await redis_helper.rebuild_prep_state(r, bakery_id)
+                    await redis_helper.set_user_current_ticket(r, current_bakery_id, ticket_id)
+                    await redis_helper.consume_ready_breads(r, current_bakery_id, ticket_id)
+                    await redis_helper.rebuild_prep_state(r, current_bakery_id)
 
                     next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(
-                        r, bakery_id
+                        r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, bakery_id)
+                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id)
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
-                        await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, ticket_id)
-                        remove_customer_from_upcoming_customers.delay(ticket_id, bakery_id)
+                        await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
+                        remove_customer_from_upcoming_customers.delay(ticket_id, current_bakery_id)
 
                     with SessionLocal() as db:
-                        crud.consume_breads_for_customer_today(db, bakery_id, ticket_id)
+                        crud.consume_breads_for_customer_today(db, current_bakery_id, ticket_id)
 
                     msg = (
-                        f"Bakery ID: {bakery_id}"
+                        f"Bakery ID: {current_bakery_id}"
                         f"\nTicket Number: {ticket_id}"
                         f"\nAction: auto-dispatch to wait list"
                     )
