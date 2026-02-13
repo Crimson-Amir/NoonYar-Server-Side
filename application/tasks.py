@@ -168,8 +168,6 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
-    target_bakery_id = bakery_id
-
     async def _task():
         r = aioredis.from_url(
             settings.REDIS_URL,
@@ -180,15 +178,15 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                 bakeries = crud.get_all_active_bakeries(session)
 
             target_bakery_ids = []
-            if target_bakery_id is not None:
-                target_bakery_ids = [int(target_bakery_id)]
+            if bakery_id is not None:
+                target_bakery_ids = [int(bakery_id)]
             else:
                 for bakery in bakeries or []:
                     target_bakery_ids.append(int(getattr(bakery, "bakery_id", bakery)))
 
-            for current_bakery_id in target_bakery_ids:
-                await redis_helper.rebuild_prep_state(r, current_bakery_id)
-                lock_key = f"bakery:{current_bakery_id}:auto_dispatch_lock"
+            for bakery_id in target_bakery_ids:
+                await redis_helper.rebuild_prep_state(r, bakery_id)
+                lock_key = f"bakery:{bakery_id}:auto_dispatch_lock"
                 lock_token = uuid4().hex
                 acquired = await r.set(lock_key, lock_token, nx=True, ex=10)
                 if not acquired:
