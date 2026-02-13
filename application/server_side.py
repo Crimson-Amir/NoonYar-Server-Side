@@ -51,6 +51,11 @@ async def lifespan(app: FastAPI):
         IntervalTrigger(minutes=30, timezone=ZoneInfo("Asia/Tehran")),
         id="change_bakeries_time_per_bread"
     )
+    scheduler.add_job(
+        tasks.auto_dispatch_ready_tickets.delay,
+        IntervalTrigger(seconds=1, timezone=ZoneInfo("Asia/Tehran")),
+        id="auto_dispatch_ready_tickets"
+    )
     scheduler.start()
 
     yield
