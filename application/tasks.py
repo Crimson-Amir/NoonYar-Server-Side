@@ -129,18 +129,18 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def send_otp(self, mobile_number, code, expire_m=10):
-    #url = f"https://api.sms.ir/v1/send/verify"
-    #data = {
-    #    "mobile": str(mobile_number),
-    #    "templateId": "123456",
-    #    "parameters": [{"name": "code", "value": str(code)}]
-    #}
-    #headers = {
-    #    "ACCEPT": "application/json",
-    #    "X-API-KEY": settings.SMS_KEY
-    #}
-    #response = requests.post(url, json=data, headers=headers, timeout=10)
-    #if response.status_code == 200:
+    # url = f"https://api.sms.ir/v1/send/verify"
+    # data = {
+    #     "mobile": str(mobile_number),
+    #     "templateId": "123456",
+    #     "parameters": [{"name": "code", "value": str(code)}]
+    # }
+    # headers = {
+    #     "ACCEPT": "application/json",
+    #     "X-API-KEY": settings.SMS_KEY
+    # }
+    # response = requests.post(url, json=data, headers=headers, timeout=10)
+    # if response.status_code == 200:
     r = redis.from_url(
         settings.REDIS_URL,
         decode_responses=True
@@ -150,9 +150,9 @@ def send_otp(self, mobile_number, code, expire_m=10):
         otp_store.set_otp(mobile_number, code, expire_m * 60)
     finally:
         r.close()
-    #response_json = response.json()
-    #return {"status": response_json['status'], "message": "OTP sent successfully",
-    #        "message_id": response_json["data"]["messageId"], "code": code}
+        # response_json = response.json()
+        # return {"status": response_json['status'], "message": "OTP sent successfully",
+        #         "message_id": response_json["data"]["messageId"], "code": code}
 
 
 
