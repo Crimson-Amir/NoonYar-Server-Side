@@ -1108,13 +1108,6 @@ async def new_bread(
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 
-    # Timer-based dispatch to wait list (Celery countdown)
-    best = await redis_helper.select_best_ticket_by_ready_time(r, bakery_id)
-    if best and not bool(best.get("ready")):
-        tasks.schedule_auto_dispatch.delay(int(bakery_id), int(best.get("wait_until", 0)) + 1)
-    elif best and bool(best.get("ready")):
-        tasks.auto_dispatch_ready_tickets.delay(int(bakery_id))
-
     return response
 
 

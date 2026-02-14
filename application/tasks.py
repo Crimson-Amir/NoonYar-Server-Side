@@ -22,6 +22,7 @@ celery_app = Celery(
 )
 
 
+
 @contextmanager
 def session_scope():
     db = SessionLocal()
@@ -159,6 +160,8 @@ def send_otp(self, mobile_number, code, expire_m=10):
 
 
 
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
 def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
@@ -170,7 +173,9 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
-    async def _task(target_bakery_id: int | None):
+    target_bakery_id = bakery_id
+
+    async def _task():
         r = aioredis.from_url(
             settings.REDIS_URL,
             decode_responses=True
@@ -179,13 +184,12 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
             with SessionLocal() as session:
                 bakeries = crud.get_all_active_bakeries(session)
 
+            target_bakery_ids = []
             if target_bakery_id is not None:
                 target_bakery_ids = [int(target_bakery_id)]
             else:
-                target_bakery_ids = [
-                    int(getattr(bakery, "bakery_id", bakery))
-                    for bakery in (bakeries or [])
-                ]
+                for bakery in bakeries or []:
+                    target_bakery_ids.append(int(getattr(bakery, "bakery_id", bakery)))
 
             for current_bakery_id in target_bakery_ids:
                 await redis_helper.rebuild_prep_state(r, current_bakery_id)
@@ -257,10 +261,12 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                     current_token = await r.get(lock_key)
                     if current_token == lock_token:
                         await r.delete(lock_key)
+
         finally:
             await r.close()
 
     asyncio.run(_task(bakery_id))
+
 
 
 @celery_app.task(bind=True)
