@@ -177,12 +177,21 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
     auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
 
 
+
+
+@celery_app.task(bind=True)
+@handle_task_errors
+def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
+    """Schedule a one-shot auto-dispatch check using Celery countdown."""
+    delay = max(0, int(countdown_s or 0))
+    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
-    target_bakery_id = bakery_id
 
-    async def _task():
+    async def _task(target_bakery_id: int | None):
         r = aioredis.from_url(
             settings.REDIS_URL,
             decode_responses=True
@@ -275,8 +284,6 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
     asyncio.run(_task(bakery_id))
 
 
-
-
 @celery_app.task(bind=True)
 @handle_task_errors
 def initialize_bakeries_redis_sets(self, mid_night):
@@ -303,7 +310,7 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
         finally:
             await r.close()
 
-    asyncio.run(_task())
+    asyncio.run(_task(bakery_id))
 
 
 @celery_app.task(bind=True)
