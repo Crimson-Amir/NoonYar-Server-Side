@@ -50,7 +50,9 @@ async def new_ticket(
     if not reservation_dict:
         reservation_dict = await redis_helper.get_bakery_reservations(r, bakery_id, fetch_from_redis_first=False, bakery_time_per_bread=breads_type)
 
-    customer_ticket_id = await algorithm.Algorithm.new_reservation(reservation_dict, bread_requirements.values(), r, bakery_id)
+    bread_ids_sorted = sorted(breads_type.keys())
+    counts_list = [int(bread_requirements.get(bid, 0)) for bid in bread_ids_sorted]
+    customer_ticket_id = await algorithm.Algorithm.new_reservation(reservation_dict, counts_list, r, bakery_id)
 
     customer_token = generate_daily_customer_token(bakery_id, customer_ticket_id)
 
@@ -1105,6 +1107,7 @@ async def new_bread(
         response = {"has_customer": False, "belongs_to_customer": False}
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
+
     return response
 
 

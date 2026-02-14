@@ -420,7 +420,8 @@ async def queue_all_ticket_summary(
     else:
         current_working_ticket_id = selected_normal_ticket_id
 
-    if current_working_ticket_id is not None and int(current_working_ticket_id) not in set(int(x) for x in all_ticket_ids):
+    all_ticket_ids_set = set(int(x) for x in all_ticket_ids)
+    if current_working_ticket_id is not None and int(current_working_ticket_id) not in all_ticket_ids_set:
         current_working_ticket_id = None
 
     result = {}
@@ -468,14 +469,20 @@ async def queue_all_ticket_summary(
         if int(ticket_id) in base_done_ids:
             baked_total = int(baked_total) + int(base_needed_total)
 
+        has_active_urgent = bool(urgent_active_raw)
+
         if ticket_id in served_ids:
             status = "TICKET_IS_SERVED"
         elif ticket_id in wait_list_ids:
             status = "TICKET_IS_IN_WAIT_LIST"
-        elif baked_total >= max(int(needed_total), 0) and int(needed_total) > 0:
-            status = "ALL_BREADS_PREPARED"
         elif current_working_ticket_id is not None and int(ticket_id) == int(current_working_ticket_id):
             status = "CURRENTLY_WORKING"
+        elif has_active_urgent:
+            # If urgent breads still exist for this ticket, do not mark all prepared
+            # solely from raw bread counters; keep queue-based state for UI.
+            status = "IN_QUEUE"
+        elif baked_total >= max(int(needed_total), 0) and int(needed_total) > 0:
+            status = "ALL_BREADS_PREPARED"
         else:
             status = "IN_QUEUE"
 
