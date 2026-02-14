@@ -159,6 +159,8 @@ def send_otp(self, mobile_number, code, expire_m=10):
 
 
 
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
 def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
@@ -176,12 +178,11 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
             decode_responses=True
         )
         try:
-            with SessionLocal() as session:
-                bakeries = crud.get_all_active_bakeries(session)
-
             if target_bakery_id is not None:
                 target_bakery_ids = [int(target_bakery_id)]
             else:
+                with SessionLocal() as session:
+                    bakeries = crud.get_all_active_bakeries(session)
                 target_bakery_ids = [
                     int(getattr(bakery, "bakery_id", bakery))
                     for bakery in (bakeries or [])
