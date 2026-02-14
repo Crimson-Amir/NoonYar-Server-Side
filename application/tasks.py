@@ -22,6 +22,11 @@ celery_app = Celery(
 )
 
 
+@celery_app.on_after_finalize.connect
+def setup_periodic_tasks(sender, **kwargs):
+    # Run every 5 seconds to dispatch any ready tickets to wait list.
+    sender.add_periodic_task(5.0, auto_dispatch_ready_tickets.s(), name="auto_dispatch_ready_tickets_every_5s")
+
 
 @contextmanager
 def session_scope():
@@ -162,6 +167,8 @@ def send_otp(self, mobile_number, code, expire_m=10):
 
 
 
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
 def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
@@ -266,6 +273,7 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
             await r.close()
 
     asyncio.run(_task(bakery_id))
+
 
 
 
