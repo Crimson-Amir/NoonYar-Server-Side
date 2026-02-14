@@ -639,8 +639,8 @@ async def remove_ticket(
 
     for num in numbers_to_free:
         queue_state.tickets.pop(int(num), None)
-        queue_state.slots_for_singles.discard(int(num))
-        queue_state.slots_for_multis.discard(int(num))
+        if hasattr(queue_state, "consumed_numbers"):
+            queue_state.consumed_numbers.discard(int(num))
 
     await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
