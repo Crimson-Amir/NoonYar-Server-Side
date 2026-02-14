@@ -157,6 +157,8 @@ def send_otp(self, mobile_number, code, expire_m=10):
 
 
 
+
+
 @celery_app.task(bind=True)
 @handle_task_errors
 def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
@@ -168,7 +170,7 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
-    async def _task():
+    async def _task(target_bakery_id: int | None):
         r = aioredis.from_url(
             settings.REDIS_URL,
             decode_responses=True
@@ -177,16 +179,17 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
             with SessionLocal() as session:
                 bakeries = crud.get_all_active_bakeries(session)
 
-            target_bakery_ids = []
-            if bakery_id is not None:
-                target_bakery_ids = [int(bakery_id)]
+            if target_bakery_id is not None:
+                target_bakery_ids = [int(target_bakery_id)]
             else:
-                for bakery in bakeries or []:
-                    target_bakery_ids.append(int(getattr(bakery, "bakery_id", bakery)))
+                target_bakery_ids = [
+                    int(getattr(bakery, "bakery_id", bakery))
+                    for bakery in (bakeries or [])
+                ]
 
-            for bakery_id in target_bakery_ids:
-                await redis_helper.rebuild_prep_state(r, bakery_id)
-                lock_key = f"bakery:{bakery_id}:auto_dispatch_lock"
+            for current_bakery_id in target_bakery_ids:
+                await redis_helper.rebuild_prep_state(r, current_bakery_id)
+                lock_key = f"bakery:{current_bakery_id}:auto_dispatch_lock"
                 lock_token = uuid4().hex
                 acquired = await r.set(lock_key, lock_token, nx=True, ex=10)
                 if not acquired:
@@ -231,7 +234,7 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                     await redis_helper.consume_ready_breads(r, current_bakery_id, ticket_id)
                     await redis_helper.rebuild_prep_state(r, current_bakery_id)
 
-                    next_ticket_id, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(
+                    _, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(
                         r, current_bakery_id
                     )
 
@@ -257,7 +260,8 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
         finally:
             await r.close()
 
-    asyncio.run(_task())
+    asyncio.run(_task(bakery_id))
+
 
 @celery_app.task(bind=True)
 @handle_task_errors
