@@ -143,6 +143,17 @@ async def urgent_inject(
         "bread_requirements": bread_requirements,
     })
 
+    urgent_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Injected",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": ticket_id,
+            "urgent_id": urgent_id,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_inject", urgent_msg)
+
     return {
         "status": "OK",
         "urgent_id": urgent_id,
@@ -187,6 +198,13 @@ async def urgent_edit(
         "bread_requirements": bread_requirements,
     })
 
+    urgent_edit_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Edited",
+        fields={"bakery_id": bakery_id, "urgent_id": urgent_id},
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_edit", urgent_edit_msg)
+
     return {"status": "OK"}
 
 
@@ -212,6 +230,12 @@ async def urgent_delete(
         "bakery_id": bakery_id,
         "urgent_id": urgent_id,
     })
+
+    urgent_delete_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Deleted",
+        fields={"bakery_id": bakery_id, "urgent_id": urgent_id},
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_delete", urgent_delete_msg)
 
     return {"status": "OK"}
 
@@ -292,6 +316,18 @@ async def reset_today(
         "urgent_deleted": int(urgent_deleted or 0),
         "snapshots_deleted": int(snapshots_deleted or 0),
     })
+
+    reset_msg = endpoint_helper.format_admin_event_message(
+        event_title="Bakery Reset Today",
+        fields={
+            "bakery_id": bakery_id,
+            "customers_deleted": int(customers_deleted or 0),
+            "breads_deleted": int(breads_deleted or 0),
+            "urgent_deleted": int(urgent_deleted or 0),
+            "snapshots_deleted": int(snapshots_deleted or 0),
+        },
+    )
+    await endpoint_helper.report_to_admin("warning", f"{FILE_NAME}:reset_today", reset_msg)
 
     return {
         "status": "OK",
@@ -546,6 +582,18 @@ async def modify_ticket(
         "bread_requirements": bread_requirements,
     })
 
+    modify_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Modified",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "location": "queue",
+            "baked_count": baked_count,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:modify_ticket", modify_msg)
+
     return {
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
@@ -676,6 +724,17 @@ async def remove_ticket(
         "blocked_numbers": sorted(list(numbers_to_free)),
         "removed_breads": len(to_remove_breads),
     })
+
+    remove_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Removed",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "freed_numbers": sorted(list(numbers_to_free)),
+            "removed_breads": len(to_remove_breads),
+        },
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:remove_ticket", remove_msg)
 
     return {
         "status": "OK",

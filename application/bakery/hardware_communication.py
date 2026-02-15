@@ -93,17 +93,18 @@ async def new_ticket(
 
     # Telegram log: new ticket
     bread_names = await redis_helper.get_bakery_bread_names(r)
-    bread_lines = []
-    for bid, count in bread_requirements.items():
-        name = bread_names.get(str(bid), str(bid)) if bread_names else str(bid)
-        bread_lines.append(f"- {name} (id: {bid}): {count}")
-
-    ticket_msg = (
-        f"Bakery ID: {bakery_id}"
-        f"\nTicket Number: {customer_ticket_id}"
-        f"\nShow On Display: {show_on_display}"
-        f"\nToken: {customer_token}"
-        f"\n\nBread Requirements:\n" + "\n".join(bread_lines)
+    ticket_msg = endpoint_helper.format_admin_event_message(
+        event_title="New Ticket Created",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "token": customer_token,
+            "show_on_display": show_on_display,
+        },
+        bread_requirements={
+            (bread_names.get(str(bid), str(bid)) if bread_names else str(bid)): int(count)
+            for bid, count in bread_requirements.items()
+        },
     )
 
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:new_ticket", ticket_msg)
@@ -293,11 +294,15 @@ async def serve_ticket_by_token(
     })
 
     # Telegram log: serve ticket by token
-    serve_msg = (
-        f"Bakery ID: {bakery_id}"
-        f"\nTicket Number: {customer_id}"
-        f"\nCustomer ID: {customer.id}"
-        f"\nToken: {token_value}"
+    serve_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Served By Token",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_id,
+            "customer_id": customer.id,
+            "token": token_value,
+        },
+        bread_requirements={**user_detail, **({f"urgent::{k}": v for k, v in urgent_breads.items()} if urgent_breads else {})},
     )
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:serve_ticket_by_token", serve_msg)
 
@@ -618,9 +623,13 @@ async def send_ticket_to_wait_list(
     logger.info(f"{FILE_NAME}:send_ticket_to_wait_list", extra={"bakery_id": bakery_id, "customer_id": customer_id})
 
     # Telegram log: ticket moved to wait list
-    wait_list_msg = (
-        f"Bakery ID: {bakery_id}"
-        f"\nTicket Number: {customer_id}"
+    wait_list_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Sent To Wait List",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_id,
+            "next_ticket_id": next_ticket_id,
+        },
     )
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:send_ticket_to_wait_list", wait_list_msg)
     return {
