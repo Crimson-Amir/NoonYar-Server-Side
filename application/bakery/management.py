@@ -143,6 +143,17 @@ async def urgent_inject(
         "bread_requirements": bread_requirements,
     })
 
+    urgent_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Injected",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": ticket_id,
+            "urgent_id": urgent_id,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_inject", urgent_msg)
+
     return {
         "status": "OK",
         "urgent_id": urgent_id,
@@ -187,6 +198,13 @@ async def urgent_edit(
         "bread_requirements": bread_requirements,
     })
 
+    urgent_edit_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Edited",
+        fields={"bakery_id": bakery_id, "urgent_id": urgent_id},
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_edit", urgent_edit_msg)
+
     return {"status": "OK"}
 
 
@@ -212,6 +230,12 @@ async def urgent_delete(
         "bakery_id": bakery_id,
         "urgent_id": urgent_id,
     })
+
+    urgent_delete_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Deleted",
+        fields={"bakery_id": bakery_id, "urgent_id": urgent_id},
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_delete", urgent_delete_msg)
 
     return {"status": "OK"}
 
@@ -292,6 +316,18 @@ async def reset_today(
         "urgent_deleted": int(urgent_deleted or 0),
         "snapshots_deleted": int(snapshots_deleted or 0),
     })
+
+    reset_msg = endpoint_helper.format_admin_event_message(
+        event_title="Bakery Reset Today",
+        fields={
+            "bakery_id": bakery_id,
+            "customers_deleted": int(customers_deleted or 0),
+            "breads_deleted": int(breads_deleted or 0),
+            "urgent_deleted": int(urgent_deleted or 0),
+            "snapshots_deleted": int(snapshots_deleted or 0),
+        },
+    )
+    await endpoint_helper.report_to_admin("warning", f"{FILE_NAME}:reset_today", reset_msg)
 
     return {
         "status": "OK",
@@ -391,7 +427,8 @@ async def modify_ticket(
     pipe0.hexists(res_key, str(customer_ticket_id))
     pipe0.hexists(wait_list_key, str(customer_ticket_id))
     pipe0.sismember(served_key, int(customer_ticket_id))
-    in_queue, in_wait_list, is_served = await pipe0.execute()
+    pipe0.hget(res_key, str(customer_ticket_id))
+    in_queue, in_wait_list, is_served, current_reservation_raw = await pipe0.execute()
 
     if bool(is_served):
         raise HTTPException(status_code=400, detail={"error": "Ticket is already served"})
@@ -402,13 +439,40 @@ async def modify_ticket(
         pipe_retry = r.pipeline()
         pipe_retry.hexists(res_key, str(customer_ticket_id))
         pipe_retry.hexists(wait_list_key, str(customer_ticket_id))
-        in_queue, in_wait_list = await pipe_retry.execute()
+        pipe_retry.hget(res_key, str(customer_ticket_id))
+        in_queue, in_wait_list, current_reservation_raw = await pipe_retry.execute()
 
     if not (in_queue or in_wait_list):
         raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
 
     if bool(in_wait_list):
         raise HTTPException(status_code=400, detail={"error": "Ticket is in wait list and cannot be modified"})
+
+    def _safe_total_from_reservation(raw_value) -> int | None:
+        if raw_value is None:
+            return None
+        try:
+            txt = raw_value.decode() if isinstance(raw_value, (bytes, bytearray)) else str(raw_value)
+            counts = [int(x) for x in str(txt).split(',') if str(x) != ""]
+            return int(sum(counts))
+        except Exception:
+            return None
+
+    old_total_breads = _safe_total_from_reservation(current_reservation_raw)
+    if old_total_breads is None:
+        breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, [int(customer_ticket_id)])
+        old_total_breads = int(sum((breads_map_db.get(int(customer_ticket_id), {}) or {}).values()))
+
+    new_total_breads = int(sum(int(v) for v in bread_requirements.values()))
+    if int(old_total_breads or 0) == 1 and int(new_total_breads) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Single-bread ticket cannot be modified to multiple breads",
+                "current_total_breads": int(old_total_breads or 0),
+                "requested_total_breads": int(new_total_breads),
+            },
+        )
 
     prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
     order_ids = []
@@ -546,6 +610,18 @@ async def modify_ticket(
         "bread_requirements": bread_requirements,
     })
 
+    modify_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Modified",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "location": "queue",
+            "baked_count": baked_count,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:modify_ticket", modify_msg)
+
     return {
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
@@ -676,6 +752,17 @@ async def remove_ticket(
         "blocked_numbers": sorted(list(numbers_to_free)),
         "removed_breads": len(to_remove_breads),
     })
+
+    remove_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Removed",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "freed_numbers": sorted(list(numbers_to_free)),
+            "removed_breads": len(to_remove_breads),
+        },
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:remove_ticket", remove_msg)
 
     return {
         "status": "OK",
