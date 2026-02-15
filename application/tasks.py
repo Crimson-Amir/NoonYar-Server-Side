@@ -310,7 +310,7 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
         finally:
             await r.close()
 
-    asyncio.run(_task(bakery_id))
+    asyncio.run(_task())
 
 
 @celery_app.task(bind=True)
