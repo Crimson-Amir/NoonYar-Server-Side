@@ -448,6 +448,10 @@ async def modify_ticket(
     if bool(in_wait_list):
         raise HTTPException(status_code=400, detail={"error": "Ticket is in wait list and cannot be modified"})
 
+    queue_state = await redis_helper.load_queue_state(r, bakery_id)
+    ticket_state = queue_state.tickets.get(int(customer_ticket_id)) if getattr(queue_state, "tickets", None) else None
+    original_ticket_kind = ticket_state.kind if ticket_state and getattr(ticket_state, "kind", None) in ("single", "multi") else None
+
     def _safe_total_from_reservation(raw_value) -> int | None:
         if raw_value is None:
             return None
@@ -464,13 +468,14 @@ async def modify_ticket(
         old_total_breads = int(sum((breads_map_db.get(int(customer_ticket_id), {}) or {}).values()))
 
     new_total_breads = int(sum(int(v) for v in bread_requirements.values()))
-    if int(old_total_breads or 0) == 1 and int(new_total_breads) > 1:
+    if str(original_ticket_kind) == "single" and int(old_total_breads or 0) == 1 and int(new_total_breads) > 1:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "Single-bread ticket cannot be modified to multiple breads",
                 "current_total_breads": int(old_total_breads or 0),
                 "requested_total_breads": int(new_total_breads),
+                "original_ticket_kind": str(original_ticket_kind),
             },
         )
 
