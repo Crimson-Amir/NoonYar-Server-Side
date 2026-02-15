@@ -163,8 +163,26 @@ async def serve_ticket(
 
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
 
-    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
-    urgent_breads = urgent_by_ticket.get(int(customer_id), {})
+    bread_names = await redis_helper.get_bakery_bread_names(r)
+
+    urgent_history_by_ticket = await redis_helper.get_urgent_history_by_ticket_ids(
+        r, bakery_id, [int(customer_id)]
+    )
+    urgent_breads_raw = urgent_history_by_ticket.get(int(customer_id), {})
+    urgent_breads = {}
+    for bid_raw, count in (urgent_breads_raw or {}).items():
+        try:
+            bid_int = int(bid_raw)
+        except Exception:
+            bid_int = None
+        try:
+            count_int = int(count)
+        except Exception:
+            count_int = 0
+        if count_int <= 0:
+            continue
+        key = bread_names.get(str(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+        urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count_int)
 
     logger.info(f"{FILE_NAME}:serve_ticket", extra={
         "bakery_id": bakery_id,
@@ -246,8 +264,26 @@ async def serve_ticket_by_token(
 
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
 
-    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
-    urgent_breads = urgent_by_ticket.get(int(customer_id), {})
+    bread_names = await redis_helper.get_bakery_bread_names(r)
+
+    urgent_history_by_ticket = await redis_helper.get_urgent_history_by_ticket_ids(
+        r, bakery_id, [int(customer_id)]
+    )
+    urgent_breads_raw = urgent_history_by_ticket.get(int(customer_id), {})
+    urgent_breads = {}
+    for bid_raw, count in (urgent_breads_raw or {}).items():
+        try:
+            bid_int = int(bid_raw)
+        except Exception:
+            bid_int = None
+        try:
+            count_int = int(count)
+        except Exception:
+            count_int = 0
+        if count_int <= 0:
+            continue
+        key = bread_names.get(str(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+        urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count_int)
 
     logger.info(f"{FILE_NAME}:serve_ticket_by_token", extra={
         "bakery_id": bakery_id,
