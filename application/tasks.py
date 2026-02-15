@@ -42,8 +42,10 @@ def session_scope():
 
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID):
+def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mode: str | None = None):
     json_data = {'chat_id': settings.TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
+    if parse_mode:
+        json_data['parse_mode'] = parse_mode
     proxies = None
     if settings.TELEGRAM_PROXY_URL:
         proxies = {
@@ -310,7 +312,7 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
         finally:
             await r.close()
 
-    asyncio.run(_task(bakery_id))
+    asyncio.run(_task())
 
 
 @celery_app.task(bind=True)
