@@ -786,10 +786,13 @@ async def bread_progress(
         _: int = Depends(require_admin),
 ):
     bakery_id = int(bakery_id)
-    should_cook_total = crud.get_today_total_required_breads(db, bakery_id)
-    should_cook_total += crud.get_today_total_required_urgent_breads(db, bakery_id)
+    required_normal = crud.get_today_total_required_breads(db, bakery_id)
+    required_urgent = crud.get_today_total_required_urgent_breads(db, bakery_id)
+    should_cook_total = int(required_normal) + int(required_urgent)
 
-    cooked_total = crud.get_today_total_baked_breads(db, bakery_id)
+    cooked_normal = crud.get_today_total_baked_breads(db, bakery_id)
+    cooked_urgent = crud.get_today_total_cooked_urgent_breads(db, bakery_id)
+    cooked_total = int(cooked_normal) + int(cooked_urgent)
 
     remaining_total = int(should_cook_total) - int(cooked_total)
     if remaining_total < 0:
@@ -799,6 +802,14 @@ async def bread_progress(
         "should_cook": int(should_cook_total),
         "already_cooked": int(cooked_total),
         "remaining": remaining_total,
+        "normal": {
+            "should_cook": int(required_normal),
+            "already_cooked": int(cooked_normal),
+        },
+        "urgent": {
+            "should_cook": int(required_urgent),
+            "already_cooked": int(cooked_urgent),
+        },
     }
 
 @router.post('/new_bakery', response_model=schemas.AddBakeryResult)
