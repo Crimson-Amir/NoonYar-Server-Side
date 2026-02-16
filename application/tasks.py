@@ -42,8 +42,10 @@ def session_scope():
 
 
 @celery_app.task(autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
-def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID):
+def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mode: str | None = None):
     json_data = {'chat_id': settings.TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
+    if parse_mode:
+        json_data['parse_mode'] = parse_mode
     proxies = None
     if settings.TELEGRAM_PROXY_URL:
         proxies = {
@@ -119,7 +121,7 @@ def serve_wait_list_ticket(self, ticket_id, bakery_id):
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def send_ticket_to_wait_list(self, ticket_id, bakery_id):
+def send_ticket_to_wait_list(self, ticket_id, bakery_id, notify_telegram: bool = True, source: str = "system"):
     with session_scope() as db:
         customer_id = crud.update_customer_status_to_false(db, ticket_id, bakery_id)
         if customer_id is None:
@@ -130,6 +132,15 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id):
             raise ValueError(f"Customer not found for ticket_id={ticket_id}, bakery_id={bakery_id}")
 
         crud.add_new_ticket_to_wait_list(db, customer_id, True)
+
+    if bool(notify_telegram):
+        msg = (
+            f"📌 Ticket Sent To Wait List"
+            f"\n• Bakery Id: {int(bakery_id)}"
+            f"\n• Ticket Number: {int(ticket_id)}"
+            f"\n• Source: {str(source)}"
+        )
+        report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
@@ -258,7 +269,7 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id)
+                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, False, "auto_dispatch")
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
@@ -310,7 +321,7 @@ def initialize_bakery_redis_sets(self, bakery_id, mid_night=False):
         finally:
             await r.close()
 
-    asyncio.run(_task(bakery_id))
+    asyncio.run(_task())
 
 
 @celery_app.task(bind=True)
