@@ -608,7 +608,7 @@ async def send_ticket_to_wait_list(
         customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
-    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id)
+    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, False, "manual_endpoint")
 
     if any(bread in time_per_bread.keys() for bread in upcoming_breads):
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
