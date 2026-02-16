@@ -269,7 +269,7 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, False, "auto_dispatch")
+                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, True, "auto_dispatch")
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)

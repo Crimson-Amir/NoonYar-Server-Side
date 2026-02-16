@@ -608,7 +608,7 @@ async def send_ticket_to_wait_list(
         customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
-    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, False, "manual_endpoint")
+    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, True, "manual_endpoint")
 
     if any(bread in time_per_bread.keys() for bread in upcoming_breads):
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
@@ -927,7 +927,7 @@ async def current_cook_customer(
 
         if any(int(x) > 0 for x in original_counts[: len(bread_ids_sorted)]):
             urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
-            tid = int(ticket_id_raw) if ticket_id_raw else -1
+            tid = int(ticket_id_raw) if ticket_id_raw else 0
             return {
                 "customer_id": tid,
                 "customer_breads": urgent_breads,
@@ -1015,7 +1015,7 @@ async def current_cook_customer(
 
             if any(int(x) > 0 for x in original_counts[: len(bread_ids_sorted)]):
                 urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
-                tid = int(ticket_id_raw) if ticket_id_raw else -1
+                tid = int(ticket_id_raw) if ticket_id_raw else 0
                 return {
                     "customer_id": tid,
                     "customer_breads": urgent_breads,
@@ -1072,32 +1072,31 @@ async def new_bread(
             pipe_u.hget(u_item_key, "original_breads")
             tid_raw, orig_raw = await pipe_u.execute()
             
-            # Register Urgent Bread
-            if tid_raw:
-                tid = int(_t(tid_raw))
-                b_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
-                b_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
-                
-                pipe_m = r.pipeline()
-                pipe_m.get(b_time_key)
-                pipe_m.zrevrange(b_key, 0, 0, withscores=True)
-                b_time_s_raw, last_b_data = await pipe_m.execute()
-                
-                b_time_s = int(b_time_s_raw or 0)
-                idx = int(last_b_data[0][1]) + 1 if last_b_data else 1
-                now_ts = int(time.time())
-                cook_ts = now_ts + b_time_s
-                ttl = seconds_until_midnight_iran()
-                
-                await r.zadd(b_key, {f"{cook_ts}:{idx}:{tid}": idx})
-                await r.expire(b_key, ttl)
+            # Register Urgent Bread (ticket-linked or standalone as empty ticket=0)
+            tid = int(_t(tid_raw)) if tid_raw else 0
+            b_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+            b_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
+
+            pipe_m = r.pipeline()
+            pipe_m.get(b_time_key)
+            pipe_m.zrevrange(b_key, 0, 0, withscores=True)
+            b_time_s_raw, last_b_data = await pipe_m.execute()
+
+            b_time_s = int(b_time_s_raw or 0)
+            idx = int(last_b_data[0][1]) + 1 if last_b_data else 1
+            now_ts = int(time.time())
+            cook_ts = now_ts + b_time_s
+            ttl = seconds_until_midnight_iran()
+
+            await r.zadd(b_key, {f"{cook_ts}:{idx}:{tid}": idx})
+            await r.expire(b_key, ttl)
 
             b_ids = sorted(time_per_bread.keys())
             orig_c = [int(x) for x in _t(orig_raw).split(",") if x] if orig_raw else []
             if len(orig_c) < len(b_ids): orig_c += [0] * (len(b_ids) - len(orig_c))
             
             response = {
-                "customer_id": int(_t(tid_raw)) if tid_raw else -1,
+                "customer_id": int(_t(tid_raw)) if tid_raw else 0,
                 "customer_breads": {bid: c for bid, c in zip(b_ids, orig_c)},
                 "next_customer": False,
                 "urgent": True,
