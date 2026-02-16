@@ -5,6 +5,8 @@ from application.setting import settings
 import traceback
 from uuid import uuid4
 from application.logger_config import logger
+import json
+import html
 
 def get_db():
     db = SessionLocal()
@@ -43,10 +45,34 @@ async def report_to_admin(level: str, fun_name: str, msg: str):
 
         message = f"{emoji} Report {level.replace('_', ' ')} {fun_name}\n\n{msg}"
 
-        report_to_admin_api.delay(message, message_thread_id=thread_id)
+        report_to_admin_api.delay(message, message_thread_id=thread_id, parse_mode="HTML")
 
     except Exception as e:
         logger.error("error in report_to_admin", extra={"error": str(e)})
+
+
+def format_admin_event_message(event_title: str, fields: dict | None = None, bread_requirements: dict | None = None) -> str:
+    """Build a cleaner Telegram-ready event message body.
+
+    This helper keeps event reports consistent and easy to scan.
+    """
+    lines = [f"📌 {event_title}"]
+
+    if fields:
+        for key, value in fields.items():
+            label = str(key).replace('_', ' ').strip().title()
+            if isinstance(value, (dict, list, tuple, set)):
+                pretty_value = html.escape(json.dumps(value, ensure_ascii=False, indent=2))
+                lines.append(f"• {label}:\n<pre>{pretty_value}</pre>")
+            else:
+                lines.append(f"• {label}: <code>{html.escape(str(value))}</code>")
+
+    if bread_requirements:
+        lines.append("\n🍞 Bread Requirements:")
+        for bread_name_or_id, count in bread_requirements.items():
+            lines.append(f"  - {html.escape(str(bread_name_or_id))}: {html.escape(str(count))}")
+
+    return "\n".join(lines)
 
 
 async def log_and_report_error(context: str, error: Exception, extra: dict = None):
