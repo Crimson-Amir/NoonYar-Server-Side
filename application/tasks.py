@@ -133,14 +133,13 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id, notify_telegram: bool =
 
         crud.add_new_ticket_to_wait_list(db, customer_id, True)
 
-    if bool(notify_telegram):
-        msg = (
-            f"📌 Ticket Sent To Wait List"
-            f"\n• Bakery Id: {int(bakery_id)}"
-            f"\n• Ticket Number: {int(ticket_id)}"
-            f"\n• Source: {str(source)}"
-        )
-        report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+    msg = (
+        f"📌 Ticket Sent To Wait List"
+        f"\n• Bakery Id: {int(bakery_id)}"
+        f"\n• Ticket Number: {int(ticket_id)}"
+        f"\n• Source: {str(source)}"
+    )
+    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
