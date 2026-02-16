@@ -751,6 +751,24 @@ def get_today_total_required_breads(db: Session, bakery_id: int) -> int:
     return int(total or 0)
 
 
+def _sum_bread_counts_from_json_payload(payload) -> int:
+    """Best-effort summation of bread counts from JSON payload."""
+    total = 0
+    if isinstance(payload, dict):
+        values = payload.values()
+    elif isinstance(payload, list):
+        values = payload
+    else:
+        return 0
+
+    for v in values:
+        try:
+            total += int(v)
+        except Exception:
+            continue
+    return int(total)
+
+
 def get_today_total_required_urgent_breads(db: Session, bakery_id: int) -> int:
     tehran = pytz.timezone("Asia/Tehran")
     now_tehran = datetime.now(tehran)
@@ -771,15 +789,52 @@ def get_today_total_required_urgent_breads(db: Session, bakery_id: int) -> int:
         if not original_json:
             continue
         try:
-            m = json.loads(original_json)
+            payload = json.loads(original_json)
         except Exception:
             continue
-        if isinstance(m, dict):
-            for v in m.values():
-                try:
-                    total += int(v)
-                except Exception:
-                    continue
+        total += _sum_bread_counts_from_json_payload(payload)
+    return int(total)
+
+
+def get_today_total_cooked_urgent_breads(db: Session, bakery_id: int) -> int:
+    """Estimate cooked urgent breads from urgent logs.
+
+    cooked = sum(max(0, original_total - remaining_total)) for non-cancelled urgent rows.
+    """
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    rows = (
+        db.query(
+            models.UrgentBreadLog.original_breads_json,
+            models.UrgentBreadLog.remaining_breads_json,
+            models.UrgentBreadLog.status,
+        )
+        .filter(models.UrgentBreadLog.bakery_id == int(bakery_id))
+        .filter(models.UrgentBreadLog.register_date >= midnight_utc)
+        .all()
+    )
+
+    total = 0
+    for original_json, remaining_json, status in rows:
+        if str(status) == "CANCELLED":
+            continue
+
+        try:
+            original_payload = json.loads(original_json) if original_json else {}
+        except Exception:
+            original_payload = {}
+
+        try:
+            remaining_payload = json.loads(remaining_json) if remaining_json else {}
+        except Exception:
+            remaining_payload = {}
+
+        original_total = _sum_bread_counts_from_json_payload(original_payload)
+        remaining_total = _sum_bread_counts_from_json_payload(remaining_payload)
+        total += max(0, int(original_total) - int(remaining_total))
 
     return int(total)
 
