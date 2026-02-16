@@ -719,9 +719,10 @@ async def remove_ticket(
             numbers_to_free.add(int(num))
 
     for num in numbers_to_free:
+        # Burn removed ticket numbers permanently so allocator never reuses them.
         queue_state.tickets.pop(int(num), None)
         if hasattr(queue_state, "consumed_numbers"):
-            queue_state.consumed_numbers.discard(int(num))
+            queue_state.consumed_numbers.add(int(num))
 
     await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
@@ -754,7 +755,7 @@ async def remove_ticket(
     logger.info(f"{FILE_NAME}:remove_ticket", extra={
         "bakery_id": bakery_id,
         "customer_ticket_id": customer_ticket_id,
-        "blocked_numbers": sorted(list(numbers_to_free)),
+        "burned_numbers": sorted(list(numbers_to_free)),
         "removed_breads": len(to_remove_breads),
     })
 
@@ -763,7 +764,7 @@ async def remove_ticket(
         fields={
             "bakery_id": bakery_id,
             "ticket_number": customer_ticket_id,
-            "freed_numbers": sorted(list(numbers_to_free)),
+            "burned_numbers": sorted(list(numbers_to_free)),
             "removed_breads": len(to_remove_breads),
         },
     )
@@ -772,8 +773,7 @@ async def remove_ticket(
     return {
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
-        "freed_numbers": sorted(list(numbers_to_free)),
-        "blocked_numbers": sorted(list(numbers_to_free)),
+        "burned_numbers": sorted(list(numbers_to_free)),
     }
 
 
