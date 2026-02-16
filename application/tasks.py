@@ -140,7 +140,7 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id, notify_telegram: bool =
             f"\n• Ticket Number: {int(ticket_id)}"
             f"\n• Source: {str(source)}"
         )
-        report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
+        report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
