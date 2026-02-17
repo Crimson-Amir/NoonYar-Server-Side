@@ -48,6 +48,7 @@ async def urgent_inject(
     bakery_id = int(payload.bakery_id)
     ticket_id = int(payload.ticket_id) if payload.ticket_id is not None else None
     bread_requirements = payload.bread_requirements
+    reason = str(payload.reason or "").strip()
 
     if any(int(v) < 0 for v in bread_requirements.values()):
         raise HTTPException(status_code=400, detail="Bread values cannot be negative")
@@ -153,9 +154,10 @@ async def urgent_inject(
         ticket_id,
         bread_requirements,
         time_per_bread=time_per_bread,
+        reason=reason,
     )
 
-    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_id, bread_requirements)
+    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_id, bread_requirements, reason)
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 

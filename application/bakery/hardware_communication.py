@@ -74,7 +74,33 @@ def _get_grouped_urgent_breads_for_tickets(bakery_id: int, ticket_ids: list[int]
         grouped.setdefault(int(tid), {})[str(getattr(row, "urgent_id", ""))] = {
             "breads": breads_named,
             "is_prepared": str(getattr(row, "status", "")) == "DONE",
+            "reason": "",
         }
+
+    return grouped
+
+
+async def _fill_urgent_reasons_from_redis(r, bakery_id: int, grouped: dict[int, dict[str, dict]]) -> dict[int, dict[str, dict]]:
+    urgent_ids: list[str] = []
+    for by_id in (grouped or {}).values():
+        urgent_ids.extend([str(uid) for uid in (by_id or {}).keys()])
+
+    if not urgent_ids:
+        return grouped
+
+    pipe = r.pipeline()
+    for uid in urgent_ids:
+        pipe.hget(redis_helper.get_urgent_item_key(bakery_id, uid), "reason")
+    reason_rows = await pipe.execute()
+
+    for uid, raw in zip(urgent_ids, reason_rows):
+        txt = raw.decode() if isinstance(raw, (bytes, bytearray)) else (str(raw) if raw else "")
+        if not txt:
+            continue
+        for by_id in (grouped or {}).values():
+            if uid in by_id:
+                by_id[uid]["reason"] = txt
+                break
 
     return grouped
 
@@ -237,6 +263,7 @@ async def serve_ticket(
     urgent_grouped = _get_grouped_urgent_breads_for_tickets(
         bakery_id, [int(customer_id)], bread_names
     )
+    urgent_grouped = await _fill_urgent_reasons_from_redis(r, bakery_id, urgent_grouped)
     urgent_breads = urgent_grouped.get(int(customer_id), {})
 
     logger.info(f"{FILE_NAME}:serve_ticket", extra={
@@ -334,6 +361,7 @@ async def serve_ticket_by_token(
     urgent_grouped = _get_grouped_urgent_breads_for_tickets(
         bakery_id, [int(customer_id)], bread_names
     )
+    urgent_grouped = await _fill_urgent_reasons_from_redis(r, bakery_id, urgent_grouped)
     urgent_breads = urgent_grouped.get(int(customer_id), {})
 
     logger.info(f"{FILE_NAME}:serve_ticket_by_token", extra={
@@ -931,7 +959,9 @@ async def current_cook_customer(
         pipe_u = r.pipeline()
         pipe_u.hget(urgent_item_key, "ticket_id")
         pipe_u.hget(urgent_item_key, "original_breads")
-        ticket_id_raw, original_raw = await pipe_u.execute()
+        pipe_u.hget(urgent_item_key, "reason")
+        ticket_id_raw, original_raw, reason_raw = await pipe_u.execute()
+        reason_text = _as_text(reason_raw) or ""
 
         if ticket_id_raw and int(ticket_id_raw) == int(state_customer_id):
             original_counts = []
@@ -946,7 +976,7 @@ async def current_cook_customer(
                 return {
                     "customer_id": tid,
                     "original_breads": {"breads": _base_breads_by_name(tid), "is_prepared": bool(tid in base_done_ids)},
-                    "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}),
+                    "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}),
                     "next_customer": False,
                     "urgent": True,
                     "urgent_id": urgent_id,
@@ -983,7 +1013,9 @@ async def current_cook_customer(
         pipe_u = r.pipeline()
         pipe_u.hget(urgent_item_key, "ticket_id")
         pipe_u.hget(urgent_item_key, "original_breads")
-        ticket_id_raw, original_raw = await pipe_u.execute()
+        pipe_u.hget(urgent_item_key, "reason")
+        ticket_id_raw, original_raw, reason_raw = await pipe_u.execute()
+        reason_text = _as_text(reason_raw) or ""
 
         original_counts = []
         if original_raw:
@@ -997,7 +1029,7 @@ async def current_cook_customer(
             return {
                 "customer_id": tid,
                 "original_breads": {"breads": _base_breads_by_name(tid) if tid > 0 else {}, "is_prepared": bool(tid > 0 and tid in base_done_ids)},
-                "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts), "is_prepared": False}},
+                "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts), "is_prepared": False, "reason": reason_text}},
                 "next_customer": False,
                 "urgent": True,
                 "urgent_id": urgent_id,
@@ -1060,7 +1092,7 @@ async def current_cook_customer(
         response = {
             "customer_id": tid,
             "original_breads": {"breads": _base_breads_by_name(tid), "is_prepared": bool(tid in base_done_ids)},
-            "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}),
+            "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}),
             "next_customer": False,
             "urgent": False,
         }
@@ -1070,7 +1102,9 @@ async def current_cook_customer(
             pipe_u = r.pipeline()
             pipe_u.hget(urgent_item_key, "ticket_id")
             pipe_u.hget(urgent_item_key, "original_breads")
-            ticket_id_raw, original_raw = await pipe_u.execute()
+            pipe_u.hget(urgent_item_key, "reason")
+            ticket_id_raw, original_raw, reason_raw = await pipe_u.execute()
+            reason_text = _as_text(reason_raw) or ""
 
             original_counts = []
             if original_raw:
@@ -1084,7 +1118,7 @@ async def current_cook_customer(
                 return {
                     "customer_id": tid,
                     "original_breads": {"breads": _base_breads_by_name(tid) if tid > 0 else {}, "is_prepared": bool(tid > 0 and tid in base_done_ids)},
-                    "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts), "is_prepared": False}},
+                    "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts), "is_prepared": False, "reason": reason_text}},
                     "next_customer": False,
                     "urgent": True,
                     "urgent_id": urgent_id,

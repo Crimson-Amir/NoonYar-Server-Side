@@ -877,6 +877,7 @@ def create_urgent_bread_log(
     status: str,
     original_breads: dict,
     remaining_breads: dict,
+    reason: str | None = None,
 ):
     obj = models.UrgentBreadLog(
         bakery_id=int(bakery_id),
@@ -885,6 +886,7 @@ def create_urgent_bread_log(
         status=str(status),
         original_breads_json=json.dumps(original_breads, ensure_ascii=False),
         remaining_breads_json=json.dumps(remaining_breads, ensure_ascii=False),
+        reason=str(reason or ""),
         update_date=datetime.now(pytz.UTC),
     )
     db.add(obj)
@@ -899,6 +901,7 @@ def update_urgent_bread_log(
     status: str | None = None,
     original_breads: dict | None = None,
     remaining_breads: dict | None = None,
+    reason: str | None = None,
     done: bool = False,
     cancelled: bool = False,
 ):
@@ -917,6 +920,8 @@ def update_urgent_bread_log(
         row.original_breads_json = json.dumps(original_breads, ensure_ascii=False)
     if remaining_breads is not None:
         row.remaining_breads_json = json.dumps(remaining_breads, ensure_ascii=False)
+    if reason is not None:
+        row.reason = str(reason or "")
 
     now = datetime.now(pytz.UTC)
     row.update_date = now
