@@ -143,7 +143,7 @@ def _move_ticket_to_wait_list_and_notify(ticket_id: int, bakery_id: int, source:
         f"\n• Ticket Number: {int(ticket_id)}"
         f"\n• Source: {str(source)}"
     )
-    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+    report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
@@ -290,7 +290,7 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         f"\nTicket Number: {ticket_id}"
                         f"\nAction: auto-dispatch to wait list"
                     )
-                    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+                    report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
                 finally:
                     current_token = await r.get(lock_key)
                     if current_token == lock_token:
