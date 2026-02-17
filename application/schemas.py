@@ -104,6 +104,7 @@ class RateRequest(BaseModel):
 class UrgentInjectRequirement(BakeryID):
     ticket_id: int | None = None
     bread_requirements: Dict[str, int]
+    reason: str | None = None
 
 
 class UrgentEditRequirement(BakeryID):

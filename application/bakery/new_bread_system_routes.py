@@ -61,6 +61,7 @@ class UrgentBreadRequest(BaseModel):
     bakery_id: int
     ticket_number: int
     bread_requirements: Dict[str, int]
+    reason: str | None = None
 
 
 class PutBreadRequest(BaseModel):
@@ -166,6 +167,7 @@ async def inject_urgent_endpoint(
     bakery_id = payload.bakery_id
     ticket_number = payload.ticket_number
     bread_requirements = payload.bread_requirements
+    reason = str(payload.reason or "").strip()
 
     r = request.app.state.redis
 
@@ -193,10 +195,10 @@ async def inject_urgent_endpoint(
 
     # Also update existing urgent system for compatibility
     urgent_id = await redis_helper.create_urgent_item(
-        r, bakery_id, ticket_number, bread_requirements, time_per_bread
+        r, bakery_id, ticket_number, bread_requirements, time_per_bread, reason=reason
     )
 
-    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_number, bread_requirements)
+    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_number, bread_requirements, reason)
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 

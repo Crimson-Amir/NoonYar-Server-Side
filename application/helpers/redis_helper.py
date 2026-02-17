@@ -1020,6 +1020,7 @@ async def load_urgent_from_db(r, bakery_id: int, time_per_bread: dict):
             "remaining_breads": encoded_remaining,
             "status": str(row.status),
             "created_at": str(int(row.register_date.timestamp())) if row.register_date else "",
+            "reason": str(getattr(row, "reason", "") or ""),
         })
         pipe.expire(item_key, ttl)
 
@@ -1493,7 +1494,7 @@ async def calculate_ready_status(
     }
 
 
-async def create_urgent_item(r, bakery_id, ticket_id, bread_requirements, time_per_bread):
+async def create_urgent_item(r, bakery_id, ticket_id, bread_requirements, time_per_bread, reason: str | None = None):
     # Fix UnboundLocalError by initializing pipe immediately
     pipe = r.pipeline(transaction=True)
     bread_ids_sorted = sorted(time_per_bread.keys())
@@ -1512,6 +1513,7 @@ async def create_urgent_item(r, bakery_id, ticket_id, bread_requirements, time_p
         "remaining_breads": encoded,
         "status": "PENDING",
         "created_at": str(now_ts),
+        "reason": str(reason or ""),
     })
     pipe.expire(item_key, ttl)
     pipe.zadd(REDIS_KEY_URGENT_QUEUE.format(bakery_id), {urgent_id: score})

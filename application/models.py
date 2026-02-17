@@ -189,6 +189,7 @@ class UrgentBreadLog(Base):
     status = Column(String(32), nullable=False)
     original_breads_json = Column(Unicode, nullable=False)
     remaining_breads_json = Column(Unicode, nullable=False)
+    reason = Column(Unicode, nullable=False, default="")
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
     update_date = Column(DateTime, default=lambda: datetime.now(UTC))
     done_date = Column(DateTime, nullable=True)
