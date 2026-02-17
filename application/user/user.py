@@ -535,7 +535,7 @@ async def queue_all_ticket_summary(
 
         result[str(ticket_id)] = {
             "token": token_map.get(ticket_id),
-            "breads": breads_by_name,
+            "original_breads": breads_by_name,
             "urgent_breads": urgent_breads,
             "status": status,
         }

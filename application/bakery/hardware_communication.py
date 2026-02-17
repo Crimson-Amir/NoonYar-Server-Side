@@ -66,7 +66,7 @@ def _get_grouped_urgent_breads_for_tickets(bakery_id: int, ticket_ids: list[int]
                 bid_int = int(bid_raw)
             except Exception:
                 bid_int = None
-            name = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+            name = bread_names.get(str(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
             breads_named[str(name)] = int(breads_named.get(str(name), 0)) + int(count_int)
 
         if not breads_named:
@@ -317,6 +317,17 @@ async def serve_ticket_by_token(
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
 
     bread_names = await redis_helper.get_bakery_bread_names(r)
+    breads_by_name = {}
+    for bid, count in user_detail.items():
+        try:
+            count_int = int(count)
+        except Exception:
+            count_int = 0
+        if count_int <= 0:
+            continue
+        key = bread_names.get(str(bid), str(bid)) if bread_names else str(bid)
+        breads_by_name[str(key)] = int(breads_by_name.get(str(key), 0)) + int(count_int)
+
     urgent_grouped = _get_grouped_urgent_breads_for_tickets(
         bakery_id, [int(customer_id)], bread_names
     )
@@ -338,7 +349,7 @@ async def serve_ticket_by_token(
             "customer_id": customer.id,
             "token": token_value,
         },
-        bread_requirements={**user_detail, **({f"urgent::{k}": v for k, v in urgent_breads.items()} if urgent_breads else {})},
+        bread_requirements={**breads_by_name, **({f"urgent::{k}": v for k, v in urgent_breads.items()} if urgent_breads else {})},
     )
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:serve_ticket_by_token", serve_msg)
 
@@ -355,7 +366,7 @@ async def serve_ticket_by_token(
         pass
 
     return {
-        "user_detail": user_detail,
+        "original_breads": breads_by_name,
         "urgent_breads": urgent_breads,
     }
 
@@ -926,8 +937,8 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw)
                 return {
                     "customer_id": tid,
-                    "breads": _base_breads_by_name(tid),
-                    "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], {int(k): v for k, v in bread_names.items()}).get(int(tid), {}),
+                    "original_breads": _base_breads_by_name(tid),
+                    "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}),
                     "next_customer": False,
                     "urgent": True,
                     "urgent_id": urgent_id,
@@ -977,8 +988,8 @@ async def current_cook_customer(
             tid = int(ticket_id_raw) if ticket_id_raw else 0
             return {
                 "customer_id": tid,
-                "breads": _base_breads_by_name(tid) if tid > 0 else {},
-                "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], {int(k): v for k, v in bread_names.items()}).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts)}},
+                "original_breads": _base_breads_by_name(tid) if tid > 0 else {},
+                "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts)}},
                 "next_customer": False,
                 "urgent": True,
                 "urgent_id": urgent_id,
@@ -1040,8 +1051,8 @@ async def current_cook_customer(
         urgent_for_ticket = urgent_by_ticket.get(int(tid), {}) or {}
         response = {
             "customer_id": tid,
-            "breads": _base_breads_by_name(tid),
-            "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], {int(k): v for k, v in bread_names.items()}).get(int(tid), {}),
+            "original_breads": _base_breads_by_name(tid),
+            "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}),
             "next_customer": False,
             "urgent": False,
         }
@@ -1064,8 +1075,8 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw) if ticket_id_raw else 0
                 return {
                     "customer_id": tid,
-                    "breads": _base_breads_by_name(tid) if tid > 0 else {},
-                    "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], {int(k): v for k, v in bread_names.items()}).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts)}},
+                    "original_breads": _base_breads_by_name(tid) if tid > 0 else {},
+                    "urgent_breads": _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts)}},
                     "next_customer": False,
                     "urgent": True,
                     "urgent_id": urgent_id,
