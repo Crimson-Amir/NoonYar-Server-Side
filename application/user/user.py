@@ -462,7 +462,10 @@ async def queue_all_ticket_summary(
             named[str(key)] = int(named.get(str(key), 0)) + int(c)
 
         if named:
-            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = {"breads": named}
+            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = {
+                "breads": named,
+                "is_prepared": str(getattr(row, "status", "")) == "DONE",
+            }
 
     result = {}
     for ticket_id in all_ticket_ids:
@@ -533,9 +536,14 @@ async def queue_all_ticket_summary(
                     continue
                 breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
 
+        original_is_prepared = bool(int(ticket_id) in base_done_ids or ticket_id in served_ids or ticket_id in wait_list_ids or status == "ALL_BREADS_PREPARED")
+
         result[str(ticket_id)] = {
             "token": token_map.get(ticket_id),
-            "original_breads": {"breads": breads_by_name},
+            "original_breads": {
+                "breads": breads_by_name,
+                "is_prepared": original_is_prepared,
+            },
             "urgent_breads": urgent_breads,
             "status": status,
         }
