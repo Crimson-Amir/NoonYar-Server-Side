@@ -205,7 +205,7 @@ def complete_bread_baking(self, bakery_id: int, ticket_number: int, bread_index:
                 if ticket and ticket.is_fully_baked():
                     # Trigger auto-dispatch if needed
                     from application import tasks
-                    tasks.send_ticket_to_wait_list.delay(ticket_number, bakery_id)
+                    tasks.send_ticket_to_wait_list.delay(ticket_number, bakery_id, "new_bread_system")
 
                 return {"status": "bread_ready", "ticket_number": ticket_number}
 

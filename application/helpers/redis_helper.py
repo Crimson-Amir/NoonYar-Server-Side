@@ -566,19 +566,27 @@ async def save_queue_state(r, bakery_id: int, state) -> None:
 async def get_effective_current_served(r, bakery_id: int) -> int:
     """Return the effective current_served cutoff for ticket issuance.
 
-    This combines the explicit current_served key (set from new_bread)
-    with the maximum ticket_id that has any bread recorded in the
-    breads sorted set. The behavior matches the current_served logic
-    inside get_slots_state, but without loading or touching any of the
-    legacy slot/next/last keys.
+    This combines:
+    - explicit current_served (set from new_bread),
+    - the maximum ticket_id that has any bread recorded in breads,
+    - and the currently active prep_state ticket (if baker has started
+      a ticket but no bread has been cooked yet).
+
+    Including prep_state prevents allocating older gaps (e.g. ticket 2)
+    while baker is already working on ticket 3.
+
+    The behavior matches the current_served logic inside get_slots_state,
+    but without loading or touching any of the legacy slot/next/last keys.
     """
     current_key = REDIS_KEY_CURRENT_SERVED.format(bakery_id)
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
+    prep_state_key = REDIS_KEY_PREP_STATE.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.get(current_key)
     pipe.zrangebyscore(breads_key, '-inf', '+inf')
-    raw_current, all_breads = await pipe.execute()
+    pipe.get(prep_state_key)
+    raw_current, all_breads, raw_prep_state = await pipe.execute()
 
     current_served = int(raw_current) if raw_current is not None else 0
 
@@ -603,6 +611,16 @@ async def get_effective_current_served(r, bakery_id: int) -> int:
 
     if max_ticket_from_breads > current_served:
         current_served = max_ticket_from_breads
+
+    if raw_prep_state:
+        try:
+            prep_state_str = raw_prep_state.decode() if isinstance(raw_prep_state, (bytes, bytearray)) else str(raw_prep_state)
+            prep_ticket_id_str = prep_state_str.split(':', 1)[0]
+            prep_ticket_id = int(prep_ticket_id_str)
+            if prep_ticket_id > current_served:
+                current_served = prep_ticket_id
+        except (ValueError, TypeError, AttributeError):
+            pass
 
     return current_served
 
@@ -1219,6 +1237,11 @@ async def rebuild_prep_state(r, bakery_id: int):
     
     if not order_ids_raw:
         await r.delete(prep_state_key)
+        # Urgent-only mode: still process pending/processing urgent items even when queue is empty.
+        if u_prep_raw:
+            return
+        if int(u_q_len or 0) > 0:
+            await start_next_urgent_if_available(r, bakery_id)
         return
 
     order_ids = [int(_t(x)) for x in order_ids_raw]
