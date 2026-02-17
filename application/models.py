@@ -99,6 +99,7 @@ class Customer(Base):
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
     rating = Column(Integer, nullable=True)
     token = Column(String(5), nullable=True, index=True)
+    note = Column(Unicode, nullable=False, default="")
 
     bread_associations = relationship("CustomerBread", back_populates="customer", cascade="all, delete-orphan")
     user_associations = relationship("UserCustomer", back_populates="customer", cascade="all, delete-orphan")
@@ -189,6 +190,7 @@ class UrgentBreadLog(Base):
     status = Column(String(32), nullable=False)
     original_breads_json = Column(Unicode, nullable=False)
     remaining_breads_json = Column(Unicode, nullable=False)
+    reason = Column(Unicode, nullable=False, default="")
     register_date = Column(DateTime, default=lambda: datetime.now(UTC))
     update_date = Column(DateTime, default=lambda: datetime.now(UTC))
     done_date = Column(DateTime, nullable=True)

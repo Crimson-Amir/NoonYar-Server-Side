@@ -413,6 +413,17 @@ class BakeryQueueSystem:
                 "Ticket is still in queue. Wait for processing or Edit it.",
             )
 
+        is_currently_working = (
+            self.current_baker_task is not None
+            and not self.current_baker_task.is_urgent
+            and self.current_baker_task.number == ticket_number
+        )
+        if is_currently_working:
+            return (
+                False,
+                "Cannot inject urgent bread for a ticket that is currently working.",
+            )
+
         urgent_ticket = Ticket(ticket_number, counts_list, is_urgent=True)
         self.urgent_queue.append(urgent_ticket)
         self.urgent_queue.sort(key=lambda x: x.number)
