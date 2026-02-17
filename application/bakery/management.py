@@ -365,14 +365,38 @@ async def urgent_history(
         return int(total)
 
     bakery_id = int(bakery_id)
+    r = request.app.state.redis
+    bread_names_raw = await redis_helper.get_bakery_bread_names(r)
+    bread_names = {}
+    for k, v in (bread_names_raw or {}).items():
+        try:
+            bread_names[int(k)] = str(v)
+        except Exception:
+            continue
+
     rows = crud.get_today_urgent_bread_logs(db, bakery_id)
     items = []
     for row in rows:
-        urgent_breads = _safe_json_map(row.original_breads_json)
+        urgent_breads_raw = _safe_json_map(row.original_breads_json)
+        urgent_breads = {}
+        for bid_raw, count in (urgent_breads_raw or {}).items():
+            try:
+                count_int = int(count)
+            except Exception:
+                count_int = 0
+            if count_int <= 0:
+                continue
+            try:
+                bid_int = int(bid_raw)
+            except Exception:
+                bid_int = None
+            key = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+            urgent_breads[str(key)] = int(urgent_breads.get(str(key), 0)) + int(count_int)
+
         remaining_map = _safe_json_map(row.remaining_breads_json)
 
         remaining_total = _sum_counts(remaining_map)
-        total_required = _sum_counts(urgent_breads)
+        total_required = _sum_counts(urgent_breads_raw)
         already_cooked = max(0, int(total_required) - int(remaining_total))
 
         items.append({
