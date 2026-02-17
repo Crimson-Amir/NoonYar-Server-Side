@@ -462,7 +462,7 @@ async def queue_all_ticket_summary(
             named[str(key)] = int(named.get(str(key), 0)) + int(c)
 
         if named:
-            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = named
+            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = {"breads": named}
 
     result = {}
     for ticket_id in all_ticket_ids:
