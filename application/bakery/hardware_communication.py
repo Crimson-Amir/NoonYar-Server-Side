@@ -93,17 +93,18 @@ async def new_ticket(
 
     # Telegram log: new ticket
     bread_names = await redis_helper.get_bakery_bread_names(r)
-    bread_lines = []
-    for bid, count in bread_requirements.items():
-        name = bread_names.get(str(bid), str(bid)) if bread_names else str(bid)
-        bread_lines.append(f"- {name} (id: {bid}): {count}")
-
-    ticket_msg = (
-        f"Bakery ID: {bakery_id}"
-        f"\nTicket Number: {customer_ticket_id}"
-        f"\nShow On Display: {show_on_display}"
-        f"\nToken: {customer_token}"
-        f"\n\nBread Requirements:\n" + "\n".join(bread_lines)
+    ticket_msg = endpoint_helper.format_admin_event_message(
+        event_title="New Ticket Created",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "token": customer_token,
+            "show_on_display": show_on_display,
+        },
+        bread_requirements={
+            (bread_names.get(str(bid), str(bid)) if bread_names else str(bid)): int(count)
+            for bid, count in bread_requirements.items()
+        },
     )
 
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:new_ticket", ticket_msg)
@@ -163,8 +164,26 @@ async def serve_ticket(
 
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
 
-    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
-    urgent_breads = urgent_by_ticket.get(int(customer_id), {})
+    bread_names = await redis_helper.get_bakery_bread_names(r)
+
+    urgent_history_by_ticket = await redis_helper.get_urgent_history_by_ticket_ids(
+        r, bakery_id, [int(customer_id)]
+    )
+    urgent_breads_raw = urgent_history_by_ticket.get(int(customer_id), {})
+    urgent_breads = {}
+    for bid_raw, count in (urgent_breads_raw or {}).items():
+        try:
+            bid_int = int(bid_raw)
+        except Exception:
+            bid_int = None
+        try:
+            count_int = int(count)
+        except Exception:
+            count_int = 0
+        if count_int <= 0:
+            continue
+        key = bread_names.get(str(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+        urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count_int)
 
     logger.info(f"{FILE_NAME}:serve_ticket", extra={
         "bakery_id": bakery_id,
@@ -246,8 +265,26 @@ async def serve_ticket_by_token(
 
     user_detail = {bid: count for bid, count in zip(bread_ids, customer_reservations)}
 
-    urgent_by_ticket = await redis_helper.get_urgent_breads_by_ticket(r, bakery_id, time_per_bread)
-    urgent_breads = urgent_by_ticket.get(int(customer_id), {})
+    bread_names = await redis_helper.get_bakery_bread_names(r)
+
+    urgent_history_by_ticket = await redis_helper.get_urgent_history_by_ticket_ids(
+        r, bakery_id, [int(customer_id)]
+    )
+    urgent_breads_raw = urgent_history_by_ticket.get(int(customer_id), {})
+    urgent_breads = {}
+    for bid_raw, count in (urgent_breads_raw or {}).items():
+        try:
+            bid_int = int(bid_raw)
+        except Exception:
+            bid_int = None
+        try:
+            count_int = int(count)
+        except Exception:
+            count_int = 0
+        if count_int <= 0:
+            continue
+        key = bread_names.get(str(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+        urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count_int)
 
     logger.info(f"{FILE_NAME}:serve_ticket_by_token", extra={
         "bakery_id": bakery_id,
@@ -257,11 +294,15 @@ async def serve_ticket_by_token(
     })
 
     # Telegram log: serve ticket by token
-    serve_msg = (
-        f"Bakery ID: {bakery_id}"
-        f"\nTicket Number: {customer_id}"
-        f"\nCustomer ID: {customer.id}"
-        f"\nToken: {token_value}"
+    serve_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Served By Token",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_id,
+            "customer_id": customer.id,
+            "token": token_value,
+        },
+        bread_requirements={**user_detail, **({f"urgent::{k}": v for k, v in urgent_breads.items()} if urgent_breads else {})},
     )
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:serve_ticket_by_token", serve_msg)
 
@@ -567,7 +608,7 @@ async def send_ticket_to_wait_list(
         customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
-    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id)
+    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, "manual_endpoint")
 
     if any(bread in time_per_bread.keys() for bread in upcoming_breads):
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
@@ -582,9 +623,13 @@ async def send_ticket_to_wait_list(
     logger.info(f"{FILE_NAME}:send_ticket_to_wait_list", extra={"bakery_id": bakery_id, "customer_id": customer_id})
 
     # Telegram log: ticket moved to wait list
-    wait_list_msg = (
-        f"Bakery ID: {bakery_id}"
-        f"\nTicket Number: {customer_id}"
+    wait_list_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Sent To Wait List",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_id,
+            "next_ticket_id": next_ticket_id,
+        },
     )
     await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:send_ticket_to_wait_list", wait_list_msg)
     return {
@@ -754,6 +799,18 @@ async def current_cook_customer(
             out[str(name)] = int(out.get(str(name), 0)) + int(count)
         return out
 
+    def _counts_to_name_map(counts_list: list[int]) -> dict:
+        out = {}
+        for bid, count in zip(bread_ids_sorted, counts_list[: len(bread_ids_sorted)]):
+            if int(count) <= 0:
+                continue
+            try:
+                name = bread_names.get(int(bid), str(bid))
+            except Exception:
+                name = str(bid)
+            out[str(name)] = int(out.get(str(name), 0)) + int(count)
+        return out
+
     def _base_breads_by_name(ticket_id: int) -> dict:
         if not ticket_id or str(ticket_id) not in (reservations_map or {}):
             return {}
@@ -833,7 +890,6 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw)
                 return {
                     "customer_id": tid,
-                    "customer_breads": urgent_breads,
                     "breads": _base_breads_by_name(tid),
                     "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}),
                     "next_customer": False,
@@ -882,12 +938,11 @@ async def current_cook_customer(
 
         if any(int(x) > 0 for x in original_counts[: len(bread_ids_sorted)]):
             urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
-            tid = int(ticket_id_raw) if ticket_id_raw else -1
+            tid = int(ticket_id_raw) if ticket_id_raw else 0
             return {
                 "customer_id": tid,
-                "customer_breads": urgent_breads,
                 "breads": _base_breads_by_name(tid) if tid > 0 else {},
-                "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else {},
+                "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else _counts_to_name_map(original_counts),
                 "next_customer": False,
                 "urgent": True,
                 "urgent_id": urgent_id,
@@ -949,7 +1004,6 @@ async def current_cook_customer(
         urgent_for_ticket = urgent_by_ticket.get(int(tid), {}) or {}
         response = {
             "customer_id": tid,
-            "customer_breads": get_customer_breads_dict(tid),
             "breads": _base_breads_by_name(tid),
             "urgent_breads": _to_name_map(urgent_for_ticket),
             "next_customer": False,
@@ -970,12 +1024,11 @@ async def current_cook_customer(
 
             if any(int(x) > 0 for x in original_counts[: len(bread_ids_sorted)]):
                 urgent_breads = {bid: int(count) for bid, count in zip(bread_ids_sorted, original_counts)}
-                tid = int(ticket_id_raw) if ticket_id_raw else -1
+                tid = int(ticket_id_raw) if ticket_id_raw else 0
                 return {
                     "customer_id": tid,
-                    "customer_breads": urgent_breads,
                     "breads": _base_breads_by_name(tid) if tid > 0 else {},
-                    "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else {},
+                    "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else _counts_to_name_map(original_counts),
                     "next_customer": False,
                     "urgent": True,
                     "urgent_id": urgent_id,
@@ -1027,32 +1080,31 @@ async def new_bread(
             pipe_u.hget(u_item_key, "original_breads")
             tid_raw, orig_raw = await pipe_u.execute()
             
-            # Register Urgent Bread
-            if tid_raw:
-                tid = int(_t(tid_raw))
-                b_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
-                b_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
-                
-                pipe_m = r.pipeline()
-                pipe_m.get(b_time_key)
-                pipe_m.zrevrange(b_key, 0, 0, withscores=True)
-                b_time_s_raw, last_b_data = await pipe_m.execute()
-                
-                b_time_s = int(b_time_s_raw or 0)
-                idx = int(last_b_data[0][1]) + 1 if last_b_data else 1
-                now_ts = int(time.time())
-                cook_ts = now_ts + b_time_s
-                ttl = seconds_until_midnight_iran()
-                
-                await r.zadd(b_key, {f"{cook_ts}:{idx}:{tid}": idx})
-                await r.expire(b_key, ttl)
+            # Register Urgent Bread (ticket-linked or standalone as empty ticket=0)
+            tid = int(_t(tid_raw)) if tid_raw else 0
+            b_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+            b_time_key = redis_helper.REDIS_KEY_BAKING_TIME_S.format(bakery_id)
+
+            pipe_m = r.pipeline()
+            pipe_m.get(b_time_key)
+            pipe_m.zrevrange(b_key, 0, 0, withscores=True)
+            b_time_s_raw, last_b_data = await pipe_m.execute()
+
+            b_time_s = int(b_time_s_raw or 0)
+            idx = int(last_b_data[0][1]) + 1 if last_b_data else 1
+            now_ts = int(time.time())
+            cook_ts = now_ts + b_time_s
+            ttl = seconds_until_midnight_iran()
+
+            await r.zadd(b_key, {f"{cook_ts}:{idx}:{tid}": idx})
+            await r.expire(b_key, ttl)
 
             b_ids = sorted(time_per_bread.keys())
             orig_c = [int(x) for x in _t(orig_raw).split(",") if x] if orig_raw else []
             if len(orig_c) < len(b_ids): orig_c += [0] * (len(b_ids) - len(orig_c))
             
             response = {
-                "customer_id": int(_t(tid_raw)) if tid_raw else -1,
+                "customer_id": int(_t(tid_raw)) if tid_raw else 0,
                 "customer_breads": {bid: c for bid, c in zip(b_ids, orig_c)},
                 "next_customer": False,
                 "urgent": True,
