@@ -877,7 +877,7 @@ async def current_cook_customer(
                 bid_int = int(bid)
             except Exception:
                 bid_int = None
-            name = bread_names.get(int(bid_int), str(bid)) if bid_int is not None else str(bid)
+            name = bread_names.get(str(bid_int), str(bid)) if bid_int is not None else str(bid)
             out[str(name)] = int(count)
         return out
 
