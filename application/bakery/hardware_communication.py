@@ -799,6 +799,18 @@ async def current_cook_customer(
             out[str(name)] = int(out.get(str(name), 0)) + int(count)
         return out
 
+    def _counts_to_name_map(counts_list: list[int]) -> dict:
+        out = {}
+        for bid, count in zip(bread_ids_sorted, counts_list[: len(bread_ids_sorted)]):
+            if int(count) <= 0:
+                continue
+            try:
+                name = bread_names.get(int(bid), str(bid))
+            except Exception:
+                name = str(bid)
+            out[str(name)] = int(out.get(str(name), 0)) + int(count)
+        return out
+
     def _base_breads_by_name(ticket_id: int) -> dict:
         if not ticket_id or str(ticket_id) not in (reservations_map or {}):
             return {}
@@ -878,7 +890,6 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw)
                 return {
                     "customer_id": tid,
-                    "customer_breads": urgent_breads,
                     "breads": _base_breads_by_name(tid),
                     "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}),
                     "next_customer": False,
@@ -930,9 +941,8 @@ async def current_cook_customer(
             tid = int(ticket_id_raw) if ticket_id_raw else 0
             return {
                 "customer_id": tid,
-                "customer_breads": urgent_breads,
                 "breads": _base_breads_by_name(tid) if tid > 0 else {},
-                "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else {},
+                "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else _counts_to_name_map(original_counts),
                 "next_customer": False,
                 "urgent": True,
                 "urgent_id": urgent_id,
@@ -994,7 +1004,6 @@ async def current_cook_customer(
         urgent_for_ticket = urgent_by_ticket.get(int(tid), {}) or {}
         response = {
             "customer_id": tid,
-            "customer_breads": get_customer_breads_dict(tid),
             "breads": _base_breads_by_name(tid),
             "urgent_breads": _to_name_map(urgent_for_ticket),
             "next_customer": False,
@@ -1018,9 +1027,8 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw) if ticket_id_raw else 0
                 return {
                     "customer_id": tid,
-                    "customer_breads": urgent_breads,
                     "breads": _base_breads_by_name(tid) if tid > 0 else {},
-                    "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else {},
+                    "urgent_breads": _to_name_map(urgent_by_ticket.get(int(tid), {}) or {}) if tid > 0 else _counts_to_name_map(original_counts),
                     "next_customer": False,
                     "urgent": True,
                     "urgent_id": urgent_id,

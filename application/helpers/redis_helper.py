@@ -1237,6 +1237,11 @@ async def rebuild_prep_state(r, bakery_id: int):
     
     if not order_ids_raw:
         await r.delete(prep_state_key)
+        # Urgent-only mode: still process pending/processing urgent items even when queue is empty.
+        if u_prep_raw:
+            return
+        if int(u_q_len or 0) > 0:
+            await start_next_urgent_if_available(r, bakery_id)
         return
 
     order_ids = [int(_t(x)) for x in order_ids_raw]
