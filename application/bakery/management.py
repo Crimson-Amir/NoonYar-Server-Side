@@ -68,6 +68,30 @@ async def urgent_inject(
         if not customer:
             raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
 
+        order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+        prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
+        in_queue_raw, prep_state_raw = await r.pipeline().zscore(order_key, str(ticket_id)).get(prep_state_key).execute()
+
+        prep_ticket_id = None
+        if prep_state_raw:
+            try:
+                prep_state_str = prep_state_raw.decode() if isinstance(prep_state_raw, (bytes, bytearray)) else str(prep_state_raw)
+                prep_ticket_id = int(prep_state_str.split(":", 1)[0])
+            except Exception:
+                prep_ticket_id = None
+
+        if prep_ticket_id is not None and int(prep_ticket_id) == int(ticket_id):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Cannot inject urgent bread for a ticket that is CURRENTLY_WORKING"},
+            )
+
+        if in_queue_raw is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Cannot inject urgent bread for a ticket that is IN_QUEUE"},
+            )
+
         bread_ids_sorted = sorted(time_per_bread.keys())
         bread_counts_db = {int(b.bread_type_id): int(b.count) for b in (customer.bread_associations or [])}
         encoded_reservation_db = ",".join(
@@ -85,7 +109,6 @@ async def urgent_inject(
                 return False
 
         res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-        order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
         wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
         served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
         base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
