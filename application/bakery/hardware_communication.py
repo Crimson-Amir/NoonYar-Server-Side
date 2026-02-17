@@ -1007,6 +1007,7 @@ async def current_cook_customer(
             "breads": _base_breads_by_name(tid),
             "urgent_breads": _to_name_map(urgent_for_ticket),
             "next_customer": False,
+            "urgent": False,
         }
     else:
         if urgent_id and time_per_bread:
@@ -1036,6 +1037,7 @@ async def current_cook_customer(
         response = {
             "has_customer": False,
             "belongs_to_customer": False,
+            "urgent": False,
         }
 
     return response

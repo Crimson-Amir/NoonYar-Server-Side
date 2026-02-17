@@ -346,17 +346,43 @@ async def urgent_history(
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin),
 ):
+    def _safe_json_map(raw_value):
+        if not raw_value:
+            return {}
+        try:
+            payload = json.loads(raw_value)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _sum_counts(m: dict) -> int:
+        total = 0
+        for v in (m or {}).values():
+            try:
+                total += int(v)
+            except Exception:
+                continue
+        return int(total)
+
     bakery_id = int(bakery_id)
     rows = crud.get_today_urgent_bread_logs(db, bakery_id)
     items = []
     for row in rows:
+        urgent_breads = _safe_json_map(row.original_breads_json)
+        remaining_map = _safe_json_map(row.remaining_breads_json)
+
+        remaining_total = _sum_counts(remaining_map)
+        total_required = _sum_counts(urgent_breads)
+        already_cooked = max(0, int(total_required) - int(remaining_total))
+
         items.append({
             "urgent_id": row.urgent_id,
             "bakery_id": int(row.bakery_id),
-            "ticket_id": int(row.ticket_id) if row.ticket_id is not None else None,
+            "ticket_id": int(row.ticket_id) if row.ticket_id is not None else 0,
             "status": row.status,
-            "original_breads": json.loads(row.original_breads_json) if row.original_breads_json else {},
-            "remaining_breads": json.loads(row.remaining_breads_json) if row.remaining_breads_json else {},
+            "urgent_breads": urgent_breads,
+            "already_cooked": int(already_cooked),
+            "remaining": int(remaining_total),
             "register_date": row.register_date.isoformat() if row.register_date else None,
             "update_date": row.update_date.isoformat() if row.update_date else None,
             "done_date": row.done_date.isoformat() if row.done_date else None,
