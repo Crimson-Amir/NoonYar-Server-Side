@@ -122,6 +122,10 @@ def serve_wait_list_ticket(self, ticket_id, bakery_id):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def send_ticket_to_wait_list(self, ticket_id, bakery_id, source: str = "system"):
+    _move_ticket_to_wait_list_and_notify(ticket_id=ticket_id, bakery_id=bakery_id, source=source)
+
+
+def _move_ticket_to_wait_list_and_notify(ticket_id: int, bakery_id: int, source: str = "system"):
     with session_scope() as db:
         customer_id = crud.update_customer_status_to_false(db, ticket_id, bakery_id)
         if customer_id is None:
@@ -268,7 +272,11 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, "auto_dispatch")
+                    _move_ticket_to_wait_list_and_notify(
+                        ticket_id=ticket_id,
+                        bakery_id=current_bakery_id,
+                        source="auto_dispatch",
+                    )
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
