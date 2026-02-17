@@ -134,6 +134,17 @@ async def new_ticket_endpoint(
         "bread_requirements": bread_requirements,
     })
 
+    new_ticket_msg = endpoint_helper.format_admin_event_message(
+        event_title="New Ticket Created (Bread System)",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": ticket_number,
+            "token": customer_token,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:new_ticket", new_ticket_msg)
+
     return {
         "status": "success",
         "ticket_number": ticket_number,
@@ -195,6 +206,17 @@ async def inject_urgent_endpoint(
         "urgent_id": urgent_id,
         "bread_requirements": bread_requirements,
     })
+
+    inject_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Injected (Bread System)",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": ticket_number,
+            "urgent_id": urgent_id,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:inject_urgent", inject_msg)
 
     return {
         "status": "success",
