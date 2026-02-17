@@ -44,6 +44,7 @@ router = APIRouter(
 class NewTicketRequest(BaseModel):
     bakery_id: int
     bread_requirements: Dict[str, int]
+    note: str | None = None
 
 
 class TicketNumberRequest(BaseModel):
@@ -84,6 +85,7 @@ async def new_ticket_endpoint(
     """
     bakery_id = payload.bakery_id
     bread_requirements = payload.bread_requirements
+    note = str(payload.note or "").strip()
 
     r = request.app.state.redis
 
@@ -123,7 +125,7 @@ async def new_ticket_endpoint(
         raise HTTPException(status_code=400, detail=f"Ticket {ticket_number} already exists in Redis")
 
     # Register in database
-    tasks.register_new_customer.delay(ticket_number, bakery_id, bread_requirements, False, customer_token)
+    tasks.register_new_customer.delay(ticket_number, bakery_id, bread_requirements, False, customer_token, note)
 
     # Notify via MQTT
     await mqtt_client.update_has_customer_in_queue(request, bakery_id)

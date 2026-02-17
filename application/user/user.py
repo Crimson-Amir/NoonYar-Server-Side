@@ -337,6 +337,7 @@ async def queue_all_ticket_summary(
 
     with SessionLocal() as db:
         token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
+        note_map = crud.get_customer_notes_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
         breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
         urgent_rows = crud.get_today_urgent_bread_logs(db, bakery_id)
 
@@ -561,6 +562,7 @@ async def queue_all_ticket_summary(
             "original_breads": {
                 "breads": breads_by_name,
                 "is_prepared": original_is_prepared,
+                "note": str(note_map.get(int(ticket_id), "")),
             },
             "urgent_breads": urgent_breads,
             "status": status,

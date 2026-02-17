@@ -29,6 +29,7 @@ class BakeryID(BaseModel):
 
 class NewCustomerRequirement(BakeryID):
     bread_requirements: Dict[str, int]
+    note: str | None = None
 
 
 class ModifyTicketRequirement(BakeryID):

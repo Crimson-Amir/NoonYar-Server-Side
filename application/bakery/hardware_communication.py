@@ -118,6 +118,7 @@ async def new_ticket(
 
     r = request.app.state.redis
     bread_requirements = customer.bread_requirements
+    note = str(customer.note or "").strip()
 
     bread_count = sum(customer.bread_requirements.values())
 
@@ -169,7 +170,7 @@ async def new_ticket(
             await redis_helper.set_current_served(r, bakery_id, customer_ticket_id)
     
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display, "token": customer_token})
-    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token)
+    tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token, note)
 
     await mqtt_client.notify_new_ticket(request, bakery_id, customer_ticket_id, customer_token)
 
@@ -402,7 +403,7 @@ async def serve_ticket_by_token(
     }
 
     return {
-        "original_breads": {"breads": breads_by_name, "is_prepared": True},
+        "original_breads": {"breads": breads_by_name, "is_prepared": True, "note": str(getattr(customer, "note", "") or "")},
         "urgent_breads": urgent_breads,
     }
 
@@ -975,7 +976,7 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw)
                 return {
                     "customer_id": tid,
-                    "original_breads": {"breads": _base_breads_by_name(tid), "is_prepared": bool(tid in base_done_ids)},
+                    "original_breads": {"breads": _base_breads_by_name(tid), "is_prepared": bool(tid in base_done_ids), "note": str(note_map.get(int(tid), ""))},
                     "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}),
                     "next_customer": False,
                     "urgent": True,
@@ -1028,7 +1029,7 @@ async def current_cook_customer(
             tid = int(ticket_id_raw) if ticket_id_raw else 0
             return {
                 "customer_id": tid,
-                "original_breads": {"breads": _base_breads_by_name(tid) if tid > 0 else {}, "is_prepared": bool(tid > 0 and tid in base_done_ids)},
+                "original_breads": {"breads": _base_breads_by_name(tid) if tid > 0 else {}, "is_prepared": bool(tid > 0 and tid in base_done_ids), "note": str(note_map.get(int(tid), "")) if tid > 0 else ""},
                 "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts), "is_prepared": False, "reason": reason_text}},
                 "next_customer": False,
                 "urgent": True,
@@ -1086,12 +1087,29 @@ async def current_cook_customer(
     if state_active and state_customer_id:
         working_customer_id = state_customer_id
 
+    note_map: dict[int, str] = {}
+    candidate_note_ticket_ids: list[int] = []
+    if state_customer_id:
+        candidate_note_ticket_ids.append(int(state_customer_id))
+    if active_normal_customer_id:
+        candidate_note_ticket_ids.append(int(active_normal_customer_id))
+    if working_customer_preview:
+        candidate_note_ticket_ids.append(int(working_customer_preview))
+    if working_customer_id:
+        candidate_note_ticket_ids.append(int(working_customer_id))
+    if order_ids:
+        candidate_note_ticket_ids.extend([int(x) for x in order_ids])
+    candidate_note_ticket_ids = sorted({int(x) for x in candidate_note_ticket_ids if int(x) > 0})
+    if candidate_note_ticket_ids:
+        with SessionLocal() as db:
+            note_map = crud.get_customer_notes_by_ticket_ids_today(db, bakery_id, candidate_note_ticket_ids)
+
     if working_customer_id:
         tid = int(working_customer_id)
         urgent_for_ticket = urgent_by_ticket.get(int(tid), {}) or {}
         response = {
             "customer_id": tid,
-            "original_breads": {"breads": _base_breads_by_name(tid), "is_prepared": bool(tid in base_done_ids)},
+            "original_breads": {"breads": _base_breads_by_name(tid), "is_prepared": bool(tid in base_done_ids), "note": str(note_map.get(int(tid), ""))},
             "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}),
             "next_customer": False,
             "urgent": False,
@@ -1117,7 +1135,7 @@ async def current_cook_customer(
                 tid = int(ticket_id_raw) if ticket_id_raw else 0
                 return {
                     "customer_id": tid,
-                    "original_breads": {"breads": _base_breads_by_name(tid) if tid > 0 else {}, "is_prepared": bool(tid > 0 and tid in base_done_ids)},
+                    "original_breads": {"breads": _base_breads_by_name(tid) if tid > 0 else {}, "is_prepared": bool(tid > 0 and tid in base_done_ids), "note": str(note_map.get(int(tid), "")) if tid > 0 else ""},
                     "urgent_breads": (await _fill_urgent_reasons_from_redis(r, bakery_id, _get_grouped_urgent_breads_for_tickets(bakery_id, [int(tid)], bread_names))).get(int(tid), {}) if tid > 0 else {str(urgent_id): {"breads": _counts_to_name_map(original_counts), "is_prepared": False, "reason": reason_text}},
                     "next_customer": False,
                     "urgent": True,
