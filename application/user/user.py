@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request, HTTPException
+import json
 from fastapi.responses import RedirectResponse
 from application.helpers import endpoint_helper, redis_helper, token_helpers
 from application.algorithm import Algorithm
@@ -337,6 +338,7 @@ async def queue_all_ticket_summary(
     with SessionLocal() as db:
         token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
         breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
+        urgent_rows = crud.get_today_urgent_bread_logs(db, bakery_id)
 
     def _as_text(v):
         if v is None:
@@ -368,9 +370,6 @@ async def queue_all_ticket_summary(
         r, bakery_id, {str(k): int(v) for k, v in time_per_bread_raw.items()}
     )
 
-    urgent_history_by_ticket = await redis_helper.get_urgent_history_by_ticket_ids(
-        r, bakery_id, [int(x) for x in all_ticket_ids]
-    )
 
     current_working_ticket_id = None
     locked_normal_ticket_id = None
@@ -424,26 +423,53 @@ async def queue_all_ticket_summary(
     if current_working_ticket_id is not None and int(current_working_ticket_id) not in all_ticket_ids_set:
         current_working_ticket_id = None
 
+    def _safe_json_map(raw_value):
+        if not raw_value:
+            return {}
+        try:
+            payload = json.loads(raw_value)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    urgent_grouped_by_ticket = {}
+    for row in urgent_rows or []:
+        if str(getattr(row, "status", "")) == "CANCELLED":
+            continue
+        if getattr(row, "ticket_id", None) is None:
+            continue
+        try:
+            tid_int = int(row.ticket_id)
+        except Exception:
+            continue
+        if tid_int not in all_ticket_ids_set:
+            continue
+
+        urgent_map = _safe_json_map(getattr(row, "original_breads_json", None))
+        named = {}
+        for bid_raw, count in (urgent_map or {}).items():
+            try:
+                c = int(count)
+            except Exception:
+                c = 0
+            if c <= 0:
+                continue
+            try:
+                bid_int = int(bid_raw)
+            except Exception:
+                bid_int = None
+            key = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+            named[str(key)] = int(named.get(str(key), 0)) + int(c)
+
+        if named:
+            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = {"breads": named}
+
     result = {}
     for ticket_id in all_ticket_ids:
         counts = reservation_dict.get(ticket_id) or wait_list_dict.get(ticket_id)
         breads_by_name = {}
 
-        urgent_breads_raw = urgent_history_by_ticket.get(int(ticket_id), {})
-        urgent_breads = {}
-        for bid_raw, count in (urgent_breads_raw or {}).items():
-            try:
-                bid_int = int(bid_raw)
-            except Exception:
-                bid_int = None
-            try:
-                count_int = int(count)
-            except Exception:
-                count_int = 0
-            if count_int <= 0:
-                continue
-            key = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
-            urgent_breads[key] = int(urgent_breads.get(key, 0)) + int(count_int)
+        urgent_breads = urgent_grouped_by_ticket.get(int(ticket_id), {})
 
         base_needed_total = 0
         if counts is not None:
@@ -509,7 +535,7 @@ async def queue_all_ticket_summary(
 
         result[str(ticket_id)] = {
             "token": token_map.get(ticket_id),
-            "breads": breads_by_name,
+            "original_breads": {"breads": breads_by_name},
             "urgent_breads": urgent_breads,
             "status": status,
         }

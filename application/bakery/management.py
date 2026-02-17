@@ -143,6 +143,17 @@ async def urgent_inject(
         "bread_requirements": bread_requirements,
     })
 
+    urgent_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Injected",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": ticket_id,
+            "urgent_id": urgent_id,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_inject", urgent_msg)
+
     return {
         "status": "OK",
         "urgent_id": urgent_id,
@@ -187,6 +198,13 @@ async def urgent_edit(
         "bread_requirements": bread_requirements,
     })
 
+    urgent_edit_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Edited",
+        fields={"bakery_id": bakery_id, "urgent_id": urgent_id},
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_edit", urgent_edit_msg)
+
     return {"status": "OK"}
 
 
@@ -212,6 +230,12 @@ async def urgent_delete(
         "bakery_id": bakery_id,
         "urgent_id": urgent_id,
     })
+
+    urgent_delete_msg = endpoint_helper.format_admin_event_message(
+        event_title="Urgent Bread Deleted",
+        fields={"bakery_id": bakery_id, "urgent_id": urgent_id},
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:urgent_delete", urgent_delete_msg)
 
     return {"status": "OK"}
 
@@ -293,6 +317,18 @@ async def reset_today(
         "snapshots_deleted": int(snapshots_deleted or 0),
     })
 
+    reset_msg = endpoint_helper.format_admin_event_message(
+        event_title="Bakery Reset Today",
+        fields={
+            "bakery_id": bakery_id,
+            "customers_deleted": int(customers_deleted or 0),
+            "breads_deleted": int(breads_deleted or 0),
+            "urgent_deleted": int(urgent_deleted or 0),
+            "snapshots_deleted": int(snapshots_deleted or 0),
+        },
+    )
+    await endpoint_helper.report_to_admin("warning", f"{FILE_NAME}:reset_today", reset_msg)
+
     return {
         "status": "OK",
         "customers_deleted": int(customers_deleted or 0),
@@ -310,17 +346,67 @@ async def urgent_history(
         db: Session = Depends(endpoint_helper.get_db),
         _: int = Depends(require_admin),
 ):
+    def _safe_json_map(raw_value):
+        if not raw_value:
+            return {}
+        try:
+            payload = json.loads(raw_value)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _sum_counts(m: dict) -> int:
+        total = 0
+        for v in (m or {}).values():
+            try:
+                total += int(v)
+            except Exception:
+                continue
+        return int(total)
+
     bakery_id = int(bakery_id)
+    r = request.app.state.redis
+    bread_names_raw = await redis_helper.get_bakery_bread_names(r)
+    bread_names = {}
+    for k, v in (bread_names_raw or {}).items():
+        try:
+            bread_names[int(k)] = str(v)
+        except Exception:
+            continue
+
     rows = crud.get_today_urgent_bread_logs(db, bakery_id)
     items = []
     for row in rows:
+        urgent_breads_raw = _safe_json_map(row.original_breads_json)
+        urgent_breads = {}
+        for bid_raw, count in (urgent_breads_raw or {}).items():
+            try:
+                count_int = int(count)
+            except Exception:
+                count_int = 0
+            if count_int <= 0:
+                continue
+            try:
+                bid_int = int(bid_raw)
+            except Exception:
+                bid_int = None
+            key = bread_names.get(int(bid_int), str(bid_int)) if bid_int is not None else str(bid_raw)
+            urgent_breads[str(key)] = int(urgent_breads.get(str(key), 0)) + int(count_int)
+
+        remaining_map = _safe_json_map(row.remaining_breads_json)
+
+        remaining_total = _sum_counts(remaining_map)
+        total_required = _sum_counts(urgent_breads_raw)
+        already_cooked = max(0, int(total_required) - int(remaining_total))
+
         items.append({
             "urgent_id": row.urgent_id,
             "bakery_id": int(row.bakery_id),
-            "ticket_id": int(row.ticket_id) if row.ticket_id is not None else None,
+            "ticket_id": int(row.ticket_id) if row.ticket_id is not None else 0,
             "status": row.status,
-            "original_breads": json.loads(row.original_breads_json) if row.original_breads_json else {},
-            "remaining_breads": json.loads(row.remaining_breads_json) if row.remaining_breads_json else {},
+            "urgent_breads": urgent_breads,
+            "already_cooked": int(already_cooked),
+            "remaining": int(remaining_total),
             "register_date": row.register_date.isoformat() if row.register_date else None,
             "update_date": row.update_date.isoformat() if row.update_date else None,
             "done_date": row.done_date.isoformat() if row.done_date else None,
@@ -391,7 +477,8 @@ async def modify_ticket(
     pipe0.hexists(res_key, str(customer_ticket_id))
     pipe0.hexists(wait_list_key, str(customer_ticket_id))
     pipe0.sismember(served_key, int(customer_ticket_id))
-    in_queue, in_wait_list, is_served = await pipe0.execute()
+    pipe0.hget(res_key, str(customer_ticket_id))
+    in_queue, in_wait_list, is_served, current_reservation_raw = await pipe0.execute()
 
     if bool(is_served):
         raise HTTPException(status_code=400, detail={"error": "Ticket is already served"})
@@ -402,13 +489,45 @@ async def modify_ticket(
         pipe_retry = r.pipeline()
         pipe_retry.hexists(res_key, str(customer_ticket_id))
         pipe_retry.hexists(wait_list_key, str(customer_ticket_id))
-        in_queue, in_wait_list = await pipe_retry.execute()
+        pipe_retry.hget(res_key, str(customer_ticket_id))
+        in_queue, in_wait_list, current_reservation_raw = await pipe_retry.execute()
 
     if not (in_queue or in_wait_list):
         raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
 
     if bool(in_wait_list):
         raise HTTPException(status_code=400, detail={"error": "Ticket is in wait list and cannot be modified"})
+
+    queue_state = await redis_helper.load_queue_state(r, bakery_id)
+    ticket_state = queue_state.tickets.get(int(customer_ticket_id)) if getattr(queue_state, "tickets", None) else None
+    original_ticket_kind = ticket_state.kind if ticket_state and getattr(ticket_state, "kind", None) in ("single", "multi") else None
+
+    def _safe_total_from_reservation(raw_value) -> int | None:
+        if raw_value is None:
+            return None
+        try:
+            txt = raw_value.decode() if isinstance(raw_value, (bytes, bytearray)) else str(raw_value)
+            counts = [int(x) for x in str(txt).split(',') if str(x) != ""]
+            return int(sum(counts))
+        except Exception:
+            return None
+
+    old_total_breads = _safe_total_from_reservation(current_reservation_raw)
+    if old_total_breads is None:
+        breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, [int(customer_ticket_id)])
+        old_total_breads = int(sum((breads_map_db.get(int(customer_ticket_id), {}) or {}).values()))
+
+    new_total_breads = int(sum(int(v) for v in bread_requirements.values()))
+    if str(original_ticket_kind) == "single" and int(old_total_breads or 0) == 1 and int(new_total_breads) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Single-bread ticket cannot be modified to multiple breads",
+                "current_total_breads": int(old_total_breads or 0),
+                "requested_total_breads": int(new_total_breads),
+                "original_ticket_kind": str(original_ticket_kind),
+            },
+        )
 
     prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
     order_ids = []
@@ -546,6 +665,18 @@ async def modify_ticket(
         "bread_requirements": bread_requirements,
     })
 
+    modify_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Modified",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "location": "queue",
+            "baked_count": baked_count,
+        },
+        bread_requirements=bread_requirements,
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:modify_ticket", modify_msg)
+
     return {
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
@@ -638,9 +769,10 @@ async def remove_ticket(
             numbers_to_free.add(int(num))
 
     for num in numbers_to_free:
+        # Burn removed ticket numbers permanently so allocator never reuses them.
         queue_state.tickets.pop(int(num), None)
         if hasattr(queue_state, "consumed_numbers"):
-            queue_state.consumed_numbers.discard(int(num))
+            queue_state.consumed_numbers.add(int(num))
 
     await redis_helper.save_queue_state(r, bakery_id, queue_state)
 
@@ -673,15 +805,25 @@ async def remove_ticket(
     logger.info(f"{FILE_NAME}:remove_ticket", extra={
         "bakery_id": bakery_id,
         "customer_ticket_id": customer_ticket_id,
-        "blocked_numbers": sorted(list(numbers_to_free)),
+        "burned_numbers": sorted(list(numbers_to_free)),
         "removed_breads": len(to_remove_breads),
     })
+
+    remove_msg = endpoint_helper.format_admin_event_message(
+        event_title="Ticket Removed",
+        fields={
+            "bakery_id": bakery_id,
+            "ticket_number": customer_ticket_id,
+            "burned_numbers": sorted(list(numbers_to_free)),
+            "removed_breads": len(to_remove_breads),
+        },
+    )
+    await endpoint_helper.report_to_admin("ticket", f"{FILE_NAME}:remove_ticket", remove_msg)
 
     return {
         "status": "OK",
         "customer_ticket_id": customer_ticket_id,
-        "freed_numbers": sorted(list(numbers_to_free)),
-        "blocked_numbers": sorted(list(numbers_to_free)),
+        "burned_numbers": sorted(list(numbers_to_free)),
     }
 
 
@@ -694,10 +836,13 @@ async def bread_progress(
         _: int = Depends(require_admin),
 ):
     bakery_id = int(bakery_id)
-    should_cook_total = crud.get_today_total_required_breads(db, bakery_id)
-    should_cook_total += crud.get_today_total_required_urgent_breads(db, bakery_id)
+    required_normal = crud.get_today_total_required_breads(db, bakery_id)
+    required_urgent = crud.get_today_total_required_urgent_breads(db, bakery_id)
+    should_cook_total = int(required_normal) + int(required_urgent)
 
-    cooked_total = crud.get_today_total_baked_breads(db, bakery_id)
+    cooked_normal = crud.get_today_total_baked_breads(db, bakery_id)
+    cooked_urgent = crud.get_today_total_cooked_urgent_breads(db, bakery_id)
+    cooked_total = int(cooked_normal) + int(cooked_urgent)
 
     remaining_total = int(should_cook_total) - int(cooked_total)
     if remaining_total < 0:
@@ -707,6 +852,14 @@ async def bread_progress(
         "should_cook": int(should_cook_total),
         "already_cooked": int(cooked_total),
         "remaining": remaining_total,
+        "normal": {
+            "should_cook": int(required_normal),
+            "already_cooked": int(cooked_normal),
+        },
+        "urgent": {
+            "should_cook": int(required_urgent),
+            "already_cooked": int(cooked_urgent),
+        },
     }
 
 @router.post('/new_bakery', response_model=schemas.AddBakeryResult)
