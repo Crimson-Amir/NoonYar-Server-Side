@@ -29,11 +29,13 @@ class BakeryID(BaseModel):
 
 class NewCustomerRequirement(BakeryID):
     bread_requirements: Dict[str, int]
+    note: str | None = None
 
 
 class ModifyTicketRequirement(BakeryID):
     customer_ticket_id: int
     bread_requirements: Dict[str, int]
+    note: str | None = None
 
 class TickeOperationtRequirement(BakeryID):
     customer_ticket_id: int
@@ -104,11 +106,13 @@ class RateRequest(BaseModel):
 class UrgentInjectRequirement(BakeryID):
     ticket_id: int | None = None
     bread_requirements: Dict[str, int]
+    reason: str | None = None
 
 
 class UrgentEditRequirement(BakeryID):
     urgent_id: str
     bread_requirements: Dict[str, int]
+    reason: str | None = None
 
 
 class UrgentDeleteRequirement(BakeryID):

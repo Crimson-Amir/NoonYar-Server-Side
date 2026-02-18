@@ -44,6 +44,7 @@ router = APIRouter(
 class NewTicketRequest(BaseModel):
     bakery_id: int
     bread_requirements: Dict[str, int]
+    note: str | None = None
 
 
 class TicketNumberRequest(BaseModel):
@@ -61,6 +62,7 @@ class UrgentBreadRequest(BaseModel):
     bakery_id: int
     ticket_number: int
     bread_requirements: Dict[str, int]
+    reason: str | None = None
 
 
 class PutBreadRequest(BaseModel):
@@ -83,6 +85,7 @@ async def new_ticket_endpoint(
     """
     bakery_id = payload.bakery_id
     bread_requirements = payload.bread_requirements
+    note = str(payload.note or "").strip()
 
     r = request.app.state.redis
 
@@ -122,7 +125,7 @@ async def new_ticket_endpoint(
         raise HTTPException(status_code=400, detail=f"Ticket {ticket_number} already exists in Redis")
 
     # Register in database
-    tasks.register_new_customer.delay(ticket_number, bakery_id, bread_requirements, False, customer_token)
+    tasks.register_new_customer.delay(ticket_number, bakery_id, bread_requirements, False, customer_token, note)
 
     # Notify via MQTT
     await mqtt_client.update_has_customer_in_queue(request, bakery_id)
@@ -166,6 +169,7 @@ async def inject_urgent_endpoint(
     bakery_id = payload.bakery_id
     ticket_number = payload.ticket_number
     bread_requirements = payload.bread_requirements
+    reason = str(payload.reason or "").strip()
 
     r = request.app.state.redis
 
@@ -193,10 +197,10 @@ async def inject_urgent_endpoint(
 
     # Also update existing urgent system for compatibility
     urgent_id = await redis_helper.create_urgent_item(
-        r, bakery_id, ticket_number, bread_requirements, time_per_bread
+        r, bakery_id, ticket_number, bread_requirements, time_per_bread, reason=reason
     )
 
-    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_number, bread_requirements)
+    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_number, bread_requirements, reason)
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 

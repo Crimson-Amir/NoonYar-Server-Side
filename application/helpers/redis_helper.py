@@ -1020,6 +1020,7 @@ async def load_urgent_from_db(r, bakery_id: int, time_per_bread: dict):
             "remaining_breads": encoded_remaining,
             "status": str(row.status),
             "created_at": str(int(row.register_date.timestamp())) if row.register_date else "",
+            "reason": str(getattr(row, "reason", "") or ""),
         })
         pipe.expire(item_key, ttl)
 
@@ -1493,7 +1494,7 @@ async def calculate_ready_status(
     }
 
 
-async def create_urgent_item(r, bakery_id, ticket_id, bread_requirements, time_per_bread):
+async def create_urgent_item(r, bakery_id, ticket_id, bread_requirements, time_per_bread, reason: str | None = None):
     # Fix UnboundLocalError by initializing pipe immediately
     pipe = r.pipeline(transaction=True)
     bread_ids_sorted = sorted(time_per_bread.keys())
@@ -1512,6 +1513,7 @@ async def create_urgent_item(r, bakery_id, ticket_id, bread_requirements, time_p
         "remaining_breads": encoded,
         "status": "PENDING",
         "created_at": str(now_ts),
+        "reason": str(reason or ""),
     })
     pipe.expire(item_key, ttl)
     pipe.zadd(REDIS_KEY_URGENT_QUEUE.format(bakery_id), {urgent_id: score})
@@ -1854,7 +1856,7 @@ async def cleanup_urgent_items_for_ticket(r, bakery_id: int, ticket_id: int, sta
     return int(len(wanted))
 
 
-async def update_urgent_item_if_pending(r, bakery_id: int, urgent_id: str, bread_requirements: dict, time_per_bread: dict) -> bool:
+async def update_urgent_item_if_pending(r, bakery_id: int, urgent_id: str, bread_requirements: dict, time_per_bread: dict, reason: str | None = None) -> bool:
     item_key = get_urgent_item_key(bakery_id, urgent_id)
     pipe0 = r.pipeline()
     pipe0.hget(item_key, "status")
@@ -1873,7 +1875,10 @@ async def update_urgent_item_if_pending(r, bakery_id: int, urgent_id: str, bread
     ttl = seconds_until_midnight_iran()
 
     pipe = r.pipeline(transaction=True)
-    pipe.hset(item_key, mapping={"original_breads": encoded, "remaining_breads": encoded})
+    update_map = {"original_breads": encoded, "remaining_breads": encoded}
+    if reason is not None:
+        update_map["reason"] = str(reason or "")
+    pipe.hset(item_key, mapping=update_map)
     ticket_id_txt = None
     try:
         ticket_id_txt = ticket_id_raw.decode() if isinstance(ticket_id_raw, (bytes, bytearray)) else (str(ticket_id_raw) if ticket_id_raw is not None else None)

@@ -337,6 +337,7 @@ async def queue_all_ticket_summary(
 
     with SessionLocal() as db:
         token_map = crud.get_customer_tokens_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
+        note_map = crud.get_customer_notes_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
         breads_map_db = crud.get_customer_breads_by_ticket_ids_today(db, bakery_id, all_ticket_ids)
         urgent_rows = crud.get_today_urgent_bread_logs(db, bakery_id)
 
@@ -462,7 +463,28 @@ async def queue_all_ticket_summary(
             named[str(key)] = int(named.get(str(key), 0)) + int(c)
 
         if named:
-            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = {"breads": named}
+            urgent_grouped_by_ticket.setdefault(int(tid_int), {})[str(getattr(row, "urgent_id", ""))] = {
+                "breads": named,
+                "is_prepared": str(getattr(row, "status", "")) == "DONE",
+                "reason": "",
+            }
+
+    urgent_ids_all = []
+    for urgent_map in (urgent_grouped_by_ticket or {}).values():
+        urgent_ids_all.extend([str(uid) for uid in (urgent_map or {}).keys()])
+    if urgent_ids_all:
+        pipe_reason = r.pipeline()
+        for uid in urgent_ids_all:
+            pipe_reason.hget(redis_helper.get_urgent_item_key(bakery_id, uid), "reason")
+        reason_rows = await pipe_reason.execute()
+        for uid, reason_raw in zip(urgent_ids_all, reason_rows):
+            reason_text = _as_text(reason_raw) or ""
+            if not reason_text:
+                continue
+            for ticket_map in (urgent_grouped_by_ticket or {}).values():
+                if uid in ticket_map:
+                    ticket_map[uid]["reason"] = reason_text
+                    break
 
     result = {}
     for ticket_id in all_ticket_ids:
@@ -533,9 +555,15 @@ async def queue_all_ticket_summary(
                     continue
                 breads_by_name[bread_names.get(int(bid), str(bid))] = int(count)
 
+        original_is_prepared = bool(int(ticket_id) in base_done_ids or ticket_id in served_ids or ticket_id in wait_list_ids or status == "ALL_BREADS_PREPARED")
+
         result[str(ticket_id)] = {
             "token": token_map.get(ticket_id),
-            "original_breads": {"breads": breads_by_name},
+            "original_breads": {
+                "breads": breads_by_name,
+                "is_prepared": original_is_prepared,
+                "note": str(note_map.get(int(ticket_id), "")),
+            },
             "urgent_breads": urgent_breads,
             "status": status,
         }

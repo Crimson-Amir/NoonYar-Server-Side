@@ -79,12 +79,13 @@ def create_user(db: Session, user: schemas.SignUpRequirement):
     return db_user
 
 
-def new_customer_no_commit(db: Session, ticket_id, bakery_id, is_in_queue, token: str | None = None):
+def new_customer_no_commit(db: Session, ticket_id, bakery_id, is_in_queue, token: str | None = None, note: str | None = None):
     customer = models.Customer(
         ticket_id=ticket_id,
         bakery_id=bakery_id,
         is_in_queue=is_in_queue,
         token=token,
+        note=str(note or ""),
     )
     db.add(customer)
     db.flush()
@@ -648,6 +649,46 @@ def get_customer_by_token_today(db: Session, bakery_id: int, token: str):
     ).first()
 
 
+
+
+
+
+def update_customer_note_for_ticket_today(db: Session, bakery_id: int, ticket_id: int, note: str) -> bool:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    customer = db.query(models.Customer).filter(
+        models.Customer.bakery_id == int(bakery_id),
+        models.Customer.ticket_id == int(ticket_id),
+        models.Customer.register_date >= midnight_utc,
+    ).first()
+    if not customer:
+        return False
+
+    customer.note = str(note or "")
+    db.commit()
+    return True
+def get_customer_notes_by_ticket_ids_today(db: Session, bakery_id: int, ticket_ids: list[int]) -> dict[int, str]:
+    if not ticket_ids:
+        return {}
+
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    rows = db.query(models.Customer.ticket_id, models.Customer.note).filter(
+        models.Customer.bakery_id == int(bakery_id),
+        models.Customer.ticket_id.in_([int(x) for x in ticket_ids]),
+        models.Customer.register_date >= midnight_utc,
+    ).all()
+
+    out: dict[int, str] = {}
+    for ticket_id, note in rows:
+        out[int(ticket_id)] = str(note or "")
+    return out
 def get_customer_tokens_by_ticket_ids_today(db: Session, bakery_id: int, ticket_ids: list[int]) -> dict[int, str | None]:
     tehran = pytz.timezone("Asia/Tehran")
     now_tehran = datetime.now(tehran)
@@ -877,6 +918,7 @@ def create_urgent_bread_log(
     status: str,
     original_breads: dict,
     remaining_breads: dict,
+    reason: str | None = None,
 ):
     obj = models.UrgentBreadLog(
         bakery_id=int(bakery_id),
@@ -885,6 +927,7 @@ def create_urgent_bread_log(
         status=str(status),
         original_breads_json=json.dumps(original_breads, ensure_ascii=False),
         remaining_breads_json=json.dumps(remaining_breads, ensure_ascii=False),
+        reason=str(reason or ""),
         update_date=datetime.now(pytz.UTC),
     )
     db.add(obj)
@@ -899,6 +942,7 @@ def update_urgent_bread_log(
     status: str | None = None,
     original_breads: dict | None = None,
     remaining_breads: dict | None = None,
+    reason: str | None = None,
     done: bool = False,
     cancelled: bool = False,
 ):
@@ -917,6 +961,8 @@ def update_urgent_bread_log(
         row.original_breads_json = json.dumps(original_breads, ensure_ascii=False)
     if remaining_breads is not None:
         row.remaining_breads_json = json.dumps(remaining_breads, ensure_ascii=False)
+    if reason is not None:
+        row.reason = str(reason or "")
 
     now = datetime.now(pytz.UTC)
     row.update_date = now

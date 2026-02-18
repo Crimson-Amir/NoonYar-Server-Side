@@ -48,6 +48,7 @@ async def urgent_inject(
     bakery_id = int(payload.bakery_id)
     ticket_id = int(payload.ticket_id) if payload.ticket_id is not None else None
     bread_requirements = payload.bread_requirements
+    reason = str(payload.reason or "").strip()
 
     if any(int(v) < 0 for v in bread_requirements.values()):
         raise HTTPException(status_code=400, detail="Bread values cannot be negative")
@@ -68,6 +69,30 @@ async def urgent_inject(
         if not customer:
             raise HTTPException(status_code=404, detail={"error": "Ticket does not exist"})
 
+        order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+        prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
+        in_queue_raw, prep_state_raw = await r.pipeline().zscore(order_key, str(ticket_id)).get(prep_state_key).execute()
+
+        prep_ticket_id = None
+        if prep_state_raw:
+            try:
+                prep_state_str = prep_state_raw.decode() if isinstance(prep_state_raw, (bytes, bytearray)) else str(prep_state_raw)
+                prep_ticket_id = int(prep_state_str.split(":", 1)[0])
+            except Exception:
+                prep_ticket_id = None
+
+        if prep_ticket_id is not None and int(prep_ticket_id) == int(ticket_id):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Cannot inject urgent bread for a ticket that is CURRENTLY_WORKING"},
+            )
+
+        if in_queue_raw is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Cannot inject urgent bread for a ticket that is IN_QUEUE"},
+            )
+
         bread_ids_sorted = sorted(time_per_bread.keys())
         bread_counts_db = {int(b.bread_type_id): int(b.count) for b in (customer.bread_associations or [])}
         encoded_reservation_db = ",".join(
@@ -85,7 +110,6 @@ async def urgent_inject(
                 return False
 
         res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-        order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
         wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
         served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
         base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
@@ -130,9 +154,10 @@ async def urgent_inject(
         ticket_id,
         bread_requirements,
         time_per_bread=time_per_bread,
+        reason=reason,
     )
 
-    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_id, bread_requirements)
+    tasks.log_urgent_inject.delay(bakery_id, urgent_id, ticket_id, bread_requirements, reason)
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 
@@ -171,6 +196,7 @@ async def urgent_edit(
     bakery_id = int(payload.bakery_id)
     urgent_id = str(payload.urgent_id)
     bread_requirements = payload.bread_requirements
+    reason = payload.reason
 
     if any(int(v) < 0 for v in bread_requirements.values()):
         raise HTTPException(status_code=400, detail="Bread values cannot be negative")
@@ -186,11 +212,11 @@ async def urgent_edit(
     if set(time_per_bread.keys()) != set(bread_requirements.keys()):
         raise HTTPException(status_code=400, detail="Invalid bread types")
 
-    ok = await redis_helper.update_urgent_item_if_pending(r, bakery_id, urgent_id, bread_requirements, time_per_bread)
+    ok = await redis_helper.update_urgent_item_if_pending(r, bakery_id, urgent_id, bread_requirements, time_per_bread, reason=reason)
     if not ok:
         raise HTTPException(status_code=400, detail={"error": "Urgent item cannot be edited (not found or not pending)"})
 
-    tasks.log_urgent_edit.delay(bakery_id, urgent_id, bread_requirements)
+    tasks.log_urgent_edit.delay(bakery_id, urgent_id, bread_requirements, reason)
 
     logger.info(f"{FILE_NAME}:urgent_edit", extra={
         "bakery_id": bakery_id,
@@ -426,6 +452,7 @@ async def modify_ticket(
     bakery_id = payload.bakery_id
     customer_ticket_id = payload.customer_ticket_id
     bread_requirements = payload.bread_requirements
+    note = payload.note
 
     if any(v < 0 for v in bread_requirements.values()):
         raise HTTPException(status_code=400, detail="Bread values cannot be negative")
@@ -653,6 +680,11 @@ async def modify_ticket(
     ok = crud.update_customer_breads_for_ticket_today(db, bakery_id, customer_ticket_id, bread_requirements)
     if not ok:
         raise HTTPException(status_code=404, detail={"error": "Customer not found"})
+
+    if note is not None:
+        note_ok = crud.update_customer_note_for_ticket_today(db, bakery_id, customer_ticket_id, str(note).strip())
+        if not note_ok:
+            raise HTTPException(status_code=404, detail={"error": "Customer not found"})
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 
