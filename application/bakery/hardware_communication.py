@@ -954,6 +954,19 @@ async def current_cook_customer(
             if urgent_original_extra:
                 state_active = True
 
+    note_map: dict[int, str] = {}
+    candidate_note_ticket_ids: list[int] = []
+    if state_customer_id:
+        candidate_note_ticket_ids.append(int(state_customer_id))
+    if active_normal_customer_id:
+        candidate_note_ticket_ids.append(int(active_normal_customer_id))
+    if order_ids:
+        candidate_note_ticket_ids.extend([int(x) for x in order_ids])
+    candidate_note_ticket_ids = sorted({int(x) for x in candidate_note_ticket_ids if int(x) > 0})
+    if candidate_note_ticket_ids:
+        with SessionLocal() as db:
+            note_map = crud.get_customer_notes_by_ticket_ids_today(db, bakery_id, candidate_note_ticket_ids)
+
     # If urgent is currently processing / next, only show it if it belongs to the active ticket.
     if urgent_id and time_per_bread and state_active and state_customer_id:
         urgent_item_key = redis_helper.get_urgent_item_key(bakery_id, urgent_id)
@@ -1087,22 +1100,15 @@ async def current_cook_customer(
     if state_active and state_customer_id:
         working_customer_id = state_customer_id
 
-    note_map: dict[int, str] = {}
-    candidate_note_ticket_ids: list[int] = []
-    if state_customer_id:
-        candidate_note_ticket_ids.append(int(state_customer_id))
-    if active_normal_customer_id:
-        candidate_note_ticket_ids.append(int(active_normal_customer_id))
+    late_note_ids = []
     if working_customer_preview:
-        candidate_note_ticket_ids.append(int(working_customer_preview))
+        late_note_ids.append(int(working_customer_preview))
     if working_customer_id:
-        candidate_note_ticket_ids.append(int(working_customer_id))
-    if order_ids:
-        candidate_note_ticket_ids.extend([int(x) for x in order_ids])
-    candidate_note_ticket_ids = sorted({int(x) for x in candidate_note_ticket_ids if int(x) > 0})
-    if candidate_note_ticket_ids:
+        late_note_ids.append(int(working_customer_id))
+    late_note_ids = [int(x) for x in late_note_ids if int(x) > 0 and int(x) not in note_map]
+    if late_note_ids:
         with SessionLocal() as db:
-            note_map = crud.get_customer_notes_by_ticket_ids_today(db, bakery_id, candidate_note_ticket_ids)
+            note_map.update(crud.get_customer_notes_by_ticket_ids_today(db, bakery_id, late_note_ids))
 
     if working_customer_id:
         tid = int(working_customer_id)
