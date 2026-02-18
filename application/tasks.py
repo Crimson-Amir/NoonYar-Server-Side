@@ -268,7 +268,16 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, "auto_dispatch")
+                    with session_scope() as db:
+                        customer_id = crud.update_customer_status_to_false(db, ticket_id, current_bakery_id)
+                        if customer_id is None:
+                            customer = crud.get_customer_by_ticket_id_any_status(db, ticket_id, current_bakery_id)
+                            customer_id = customer.id if customer else None
+                        if customer_id is None:
+                            raise ValueError(
+                                f"Customer not found for ticket_id={ticket_id}, bakery_id={current_bakery_id}"
+                            )
+                        crud.add_new_ticket_to_wait_list(db, customer_id, True)
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
@@ -283,6 +292,24 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         f"\nAction: auto-dispatch to wait list"
                     )
                     report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    celery_logger.error(
+                        "Auto dispatch failed for bakery",
+                        extra={
+                            "bakery_id": current_bakery_id,
+                            "error": str(e),
+                            "traceback": tb,
+                        },
+                    )
+                    report_to_admin_api.delay(
+                        f"[🔴 ERROR] auto_dispatch_ready_tickets"
+                        f"\nBakery ID: {current_bakery_id}"
+                        f"\nReason: {str(e)}"
+                        f"\nTraceback:\n{tb[-2500:]}",
+                        settings.ERR_THREAD_ID,
+                    )
+                    continue
                 finally:
                     current_token = await r.get(lock_key)
                     if current_token == lock_token:
