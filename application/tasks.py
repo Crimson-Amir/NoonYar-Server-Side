@@ -407,7 +407,7 @@ def log_urgent_inject(self, bakery_id: int, urgent_id: str, ticket_id: int | Non
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
-def log_urgent_edit(self, bakery_id: int, urgent_id: str, bread_requirements: dict):
+def log_urgent_edit(self, bakery_id: int, urgent_id: str, bread_requirements: dict, reason: str | None = None):
     with session_scope() as db:
         bread_map = {str(k): int(v) for k, v in (bread_requirements or {}).items()}
         ok = crud.update_urgent_bread_log(
@@ -417,6 +417,7 @@ def log_urgent_edit(self, bakery_id: int, urgent_id: str, bread_requirements: di
             status="PENDING",
             original_breads=bread_map,
             remaining_breads=bread_map,
+            reason=(None if reason is None else str(reason or "")),
         )
         if not ok:
             crud.create_urgent_bread_log(
@@ -427,6 +428,7 @@ def log_urgent_edit(self, bakery_id: int, urgent_id: str, bread_requirements: di
                 status="PENDING",
                 original_breads=bread_map,
                 remaining_breads=bread_map,
+                reason=str(reason or ""),
             )
 
 

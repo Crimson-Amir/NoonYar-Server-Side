@@ -651,6 +651,25 @@ def get_customer_by_token_today(db: Session, bakery_id: int, token: str):
 
 
 
+
+
+def update_customer_note_for_ticket_today(db: Session, bakery_id: int, ticket_id: int, note: str) -> bool:
+    tehran = pytz.timezone("Asia/Tehran")
+    now_tehran = datetime.now(tehran)
+    midnight_tehran = tehran.localize(datetime.combine(now_tehran.date(), time.min))
+    midnight_utc = midnight_tehran.astimezone(pytz.utc)
+
+    customer = db.query(models.Customer).filter(
+        models.Customer.bakery_id == int(bakery_id),
+        models.Customer.ticket_id == int(ticket_id),
+        models.Customer.register_date >= midnight_utc,
+    ).first()
+    if not customer:
+        return False
+
+    customer.note = str(note or "")
+    db.commit()
+    return True
 def get_customer_notes_by_ticket_ids_today(db: Session, bakery_id: int, ticket_ids: list[int]) -> dict[int, str]:
     if not ticket_ids:
         return {}

@@ -35,6 +35,7 @@ class NewCustomerRequirement(BakeryID):
 class ModifyTicketRequirement(BakeryID):
     customer_ticket_id: int
     bread_requirements: Dict[str, int]
+    note: str | None = None
 
 class TickeOperationtRequirement(BakeryID):
     customer_ticket_id: int
@@ -111,6 +112,7 @@ class UrgentInjectRequirement(BakeryID):
 class UrgentEditRequirement(BakeryID):
     urgent_id: str
     bread_requirements: Dict[str, int]
+    reason: str | None = None
 
 
 class UrgentDeleteRequirement(BakeryID):

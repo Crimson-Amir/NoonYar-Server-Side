@@ -196,6 +196,7 @@ async def urgent_edit(
     bakery_id = int(payload.bakery_id)
     urgent_id = str(payload.urgent_id)
     bread_requirements = payload.bread_requirements
+    reason = payload.reason
 
     if any(int(v) < 0 for v in bread_requirements.values()):
         raise HTTPException(status_code=400, detail="Bread values cannot be negative")
@@ -211,11 +212,11 @@ async def urgent_edit(
     if set(time_per_bread.keys()) != set(bread_requirements.keys()):
         raise HTTPException(status_code=400, detail="Invalid bread types")
 
-    ok = await redis_helper.update_urgent_item_if_pending(r, bakery_id, urgent_id, bread_requirements, time_per_bread)
+    ok = await redis_helper.update_urgent_item_if_pending(r, bakery_id, urgent_id, bread_requirements, time_per_bread, reason=reason)
     if not ok:
         raise HTTPException(status_code=400, detail={"error": "Urgent item cannot be edited (not found or not pending)"})
 
-    tasks.log_urgent_edit.delay(bakery_id, urgent_id, bread_requirements)
+    tasks.log_urgent_edit.delay(bakery_id, urgent_id, bread_requirements, reason)
 
     logger.info(f"{FILE_NAME}:urgent_edit", extra={
         "bakery_id": bakery_id,
@@ -451,6 +452,7 @@ async def modify_ticket(
     bakery_id = payload.bakery_id
     customer_ticket_id = payload.customer_ticket_id
     bread_requirements = payload.bread_requirements
+    note = payload.note
 
     if any(v < 0 for v in bread_requirements.values()):
         raise HTTPException(status_code=400, detail="Bread values cannot be negative")
@@ -678,6 +680,11 @@ async def modify_ticket(
     ok = crud.update_customer_breads_for_ticket_today(db, bakery_id, customer_ticket_id, bread_requirements)
     if not ok:
         raise HTTPException(status_code=404, detail={"error": "Customer not found"})
+
+    if note is not None:
+        note_ok = crud.update_customer_note_for_ticket_today(db, bakery_id, customer_ticket_id, str(note).strip())
+        if not note_ok:
+            raise HTTPException(status_code=404, detail={"error": "Customer not found"})
 
     await redis_helper.rebuild_prep_state(r, bakery_id)
 
