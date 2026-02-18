@@ -227,6 +227,34 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                 extra={"target_bakery_id": target_bakery_id, "resolved_bakery_ids": target_bakery_ids},
             )
 
+            async def _log_auto_dispatch_state_snapshot(current_bakery_id: int, reason: str):
+                order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(current_bakery_id)
+                res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(current_bakery_id)
+                breads_key = redis_helper.REDIS_KEY_BREADS.format(current_bakery_id)
+                base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(current_bakery_id)
+
+                pipe_dbg = r.pipeline()
+                pipe_dbg.zrange(order_key, 0, 9)
+                pipe_dbg.hlen(res_key)
+                pipe_dbg.zcard(breads_key)
+                pipe_dbg.smembers(base_done_key)
+                order_preview, reservation_hlen, breads_zcard, base_done_raw = await pipe_dbg.execute()
+
+                base_done_preview = sorted([int(x) for x in (base_done_raw or []) if str(x).isdigit()])[:10]
+                order_preview = [int(x) for x in (order_preview or []) if str(x).isdigit()]
+
+                celery_logger.info(
+                    "auto_dispatch state snapshot",
+                    extra={
+                        "bakery_id": current_bakery_id,
+                        "reason": reason,
+                        "order_preview": order_preview,
+                        "reservation_hlen": int(reservation_hlen or 0),
+                        "breads_zcard": int(breads_zcard or 0),
+                        "base_done_preview": base_done_preview,
+                    },
+                )
+
             for current_bakery_id in target_bakery_ids:
                 celery_logger.info(
                     "auto_dispatch bakery loop begin",
@@ -250,12 +278,14 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                             "auto_dispatch no best ticket",
                             extra={"bakery_id": current_bakery_id},
                         )
+                        await _log_auto_dispatch_state_snapshot(current_bakery_id, "no_best_ticket")
                         continue
                     if not bool(best.get("ready")):
                         celery_logger.info(
                             "auto_dispatch best ticket is not ready",
                             extra={"bakery_id": current_bakery_id, "best": best},
                         )
+                        await _log_auto_dispatch_state_snapshot(current_bakery_id, "best_ticket_not_ready")
                         continue
 
                     ticket_id = int(best["ticket_id"])
