@@ -193,8 +193,10 @@ async def queue_check(
         for k, v in reservation_dict.items()
     }
 
+    bread_time_for_calc = {str(k): int(v) for k, v in bread_time.items()}
+
     ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
-        r, bakery_id, user_breads, bread_time, reservation_keys, reservation_number, reservation_dict_for_calc
+        r, bakery_id, user_breads, bread_time_for_calc, reservation_keys, reservation_number, reservation_dict_for_calc
     )
 
     return {
