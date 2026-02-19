@@ -30,12 +30,14 @@ class Settings(BaseSettings):
     # MQTT
     MQTT_BROKER_HOST: str
     MQTT_BROKER_PORT: int
+    MQTT_PUBLISH_TIMEOUT_S: float = 2.0
 
     # Redis
     REDIS_URL: str
 
     # Celery
     CELERY_BROKER_URL: str
+    ENABLE_AUTO_DISPATCH_READY_TICKETS: bool = True
 
     class Config:
         env_file = "../.env"  # only needed for local/dev; ignored in Docker if env vars already set
