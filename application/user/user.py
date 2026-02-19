@@ -15,6 +15,31 @@ router = APIRouter(
 FILE_NAME = "user:user"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 
+
+def _parse_count_vector(value):
+    """Normalize Redis/DB count vector that may be a CSV string or python list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [int(x) for x in value]
+    if isinstance(value, tuple):
+        return [int(x) for x in value]
+
+    txt = str(value).strip()
+    if not txt:
+        return []
+
+    # Handle serialized list strings like "[1, 2, 0]"
+    if txt.startswith("[") and txt.endswith("]"):
+        try:
+            parsed = json.loads(txt)
+            if isinstance(parsed, list):
+                return [int(x) for x in parsed]
+        except Exception:
+            pass
+
+    return [int(x) for x in txt.split(',') if str(x).strip() != ""]
+
 @router.get('/')
 async def root(): return RedirectResponse('/home')
 
@@ -64,7 +89,7 @@ async def queue_check(
 
     bread_time = {int(k): int(v) for k, v in time_per_bread_raw.items()}
     reservation_dict = {
-        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
+        int(k): _parse_count_vector(v) for k, v in reservations_map.items()
     }
     bread_names = {int(k): v for k, v in bread_names_raw.items()}
     bread_ids_sorted = sorted(bread_time.keys())
@@ -84,7 +109,7 @@ async def queue_check(
         }
 
     if wait_list_hit is not None:
-        wait_list_counts = list(map(int, wait_list_hit.split(','))) if wait_list_hit else []
+        wait_list_counts = _parse_count_vector(wait_list_hit)
         user_breads_persian = {
             bread_names.get(bid, str(bid)): count
             for bid, count in zip(bread_ids_sorted, wait_list_counts)
@@ -257,7 +282,7 @@ async def queue_until_ticket_summary(
         return {'msg': 'queue is empty'}
 
     reservation_dict = {
-        int(k): [int(x) for x in v.split(',')] for k, v in reservations_map.items()
+        int(k): _parse_count_vector(v) for k, v in reservations_map.items()
     }
 
     reservation_keys = sorted(reservation_dict.keys())
@@ -265,7 +290,7 @@ async def queue_until_ticket_summary(
     if t not in reservation_keys:
         raise HTTPException(status_code=404, detail="Ticket does not Exist")
 
-    included_tickets = [key for key in reservation_keys if key <= t]
+    included_tickets = [key for key in reservation_keys if key < t]
 
     people_in_queue_until_this_ticket = len(included_tickets)
     tickets_and_their_bread_count = {

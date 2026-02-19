@@ -47,6 +47,31 @@ def get_urgent_item_key(bakery_id: int, urgent_id: str) -> str:
     return f"bakery:{bakery_id}:urgent_item:{urgent_id}"
 
 
+
+
+def _parse_reservation_counts(value):
+    """Normalize reservation vector stored as CSV string, list/tuple, or JSON-like string."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [int(x) for x in value]
+    if isinstance(value, tuple):
+        return [int(x) for x in value]
+
+    txt = str(value).strip()
+    if not txt:
+        return []
+    if txt.startswith('[') and txt.endswith(']'):
+        try:
+            import json
+            parsed = json.loads(txt)
+            if isinstance(parsed, list):
+                return [int(x) for x in parsed]
+        except Exception:
+            pass
+
+    return [int(x) for x in txt.split(',') if str(x).strip() != '']
+
 def _normalize_redis_id(v) -> Optional[str]:
     if v is None:
         return None
@@ -1220,7 +1245,6 @@ async def rebuild_prep_state(r, bakery_id: int):
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
     base_done_key = REDIS_KEY_BASE_DONE.format(bakery_id)
     u_queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
-    wait_list_key = REDIS_KEY_WAIT_LIST.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.get(prep_state_key)
@@ -1249,23 +1273,10 @@ async def rebuild_prep_state(r, bakery_id: int):
     b_done_ids = set(int(_t(x)) for x in (b_done_raw or []) if x)
     time_per_bread = {str(k): int(v) for k, v in time_per_bread_raw.items()}
 
-    # --- 0. MAINTENANCE: Archive Finished Tickets ---
-    while True:
-        best = await select_best_ticket_by_ready_time(r, bakery_id)
-        if best and best["ready"]:
-            tid = best["ticket_id"]
-            res_str = res_map.get(str(tid))
-            if res_str:
-                p_arch = r.pipeline()
-                p_arch.hset(wait_list_key, str(tid), res_str)
-                p_arch.hdel(res_key, str(tid))
-                p_arch.zrem(order_key, str(tid))
-                # NO BREAD DELETION
-                p_arch.set(REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id), tid, ex=seconds_until_midnight_iran())
-                await p_arch.execute()
-                if tid in order_ids: order_ids.remove(tid)
-                continue
-        break
+    # --- 0. NOTE: No implicit dispatch here ---
+    # Keep rebuild_prep_state side-effect free for queue/wait-list transitions.
+    # Ready-ticket dispatch is handled by the canonical task:
+    # application.tasks.auto_dispatch_ready_tickets
 
     # --- 1. URGENT LOCK ---
     if u_prep_raw:
@@ -1347,7 +1358,7 @@ async def calculate_ready_status(
 
     baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
     order_ids = [int(x) for x in reservation_keys]
-    reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in reservation_dict.items()}
+    reservation_dict = {int(k): _parse_reservation_counts(v) for k, v in reservation_dict.items()}
     reservation_keys = sorted(reservation_dict.keys())
 
     base_done_ids = set(int(x) for x in (base_done_raw or []) if x is not None)
