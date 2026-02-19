@@ -24,8 +24,8 @@ celery_app = Celery(
 
 @celery_app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs):
-    # Run every 5 seconds to dispatch any ready tickets to wait list.
-    sender.add_periodic_task(5.0, auto_dispatch_ready_tickets.s(), name="auto_dispatch_ready_tickets_every_5s")
+    # Disabled per request: rely on explicit triggers instead of periodic auto-dispatch.
+    return None
 
 
 @contextmanager
