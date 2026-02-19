@@ -175,6 +175,10 @@ def complete_bread_baking(self, bakery_id: int, ticket_number: int, bread_index:
     """
     Mark a specific bread as ready after baking time has elapsed.
     """
+    celery_logger.info(
+        "complete_bread_baking started",
+        extra={"bakery_id": int(bakery_id), "ticket_number": int(ticket_number), "bread_index": int(bread_index)},
+    )
     async def _complete():
         r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         try:
@@ -203,9 +207,15 @@ def complete_bread_baking(self, bakery_id: int, ticket_number: int, bread_index:
                     None
                 )
                 if ticket and ticket.is_fully_baked():
-                    # Trigger auto-dispatch if needed
-                    from application import tasks
-                    tasks.send_ticket_to_wait_list.delay(ticket_number, bakery_id, "new_bread_system")
+                    celery_logger.info(
+                        "complete_bread_baking detected fully baked ticket; waiting for periodic auto-dispatch",
+                        extra={"bakery_id": bakery_id, "ticket_number": ticket_number},
+                    )
+                else:
+                    celery_logger.info(
+                        "complete_bread_baking ticket not fully baked yet",
+                        extra={"bakery_id": bakery_id, "ticket_number": ticket_number, "bread_index": bread_index},
+                    )
 
                 return {"status": "bread_ready", "ticket_number": ticket_number}
 

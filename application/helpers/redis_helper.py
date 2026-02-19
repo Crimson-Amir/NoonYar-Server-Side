@@ -47,6 +47,8 @@ def get_urgent_item_key(bakery_id: int, urgent_id: str) -> str:
     return f"bakery:{bakery_id}:urgent_item:{urgent_id}"
 
 
+
+
 def _normalize_redis_id(v) -> Optional[str]:
     if v is None:
         return None
@@ -1220,7 +1222,6 @@ async def rebuild_prep_state(r, bakery_id: int):
     breads_key = REDIS_KEY_BREADS.format(bakery_id)
     base_done_key = REDIS_KEY_BASE_DONE.format(bakery_id)
     u_queue_key = REDIS_KEY_URGENT_QUEUE.format(bakery_id)
-    wait_list_key = REDIS_KEY_WAIT_LIST.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.get(prep_state_key)
@@ -1249,23 +1250,10 @@ async def rebuild_prep_state(r, bakery_id: int):
     b_done_ids = set(int(_t(x)) for x in (b_done_raw or []) if x)
     time_per_bread = {str(k): int(v) for k, v in time_per_bread_raw.items()}
 
-    # --- 0. MAINTENANCE: Archive Finished Tickets ---
-    while True:
-        best = await select_best_ticket_by_ready_time(r, bakery_id)
-        if best and best["ready"]:
-            tid = best["ticket_id"]
-            res_str = res_map.get(str(tid))
-            if res_str:
-                p_arch = r.pipeline()
-                p_arch.hset(wait_list_key, str(tid), res_str)
-                p_arch.hdel(res_key, str(tid))
-                p_arch.zrem(order_key, str(tid))
-                # NO BREAD DELETION
-                p_arch.set(REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id), tid, ex=seconds_until_midnight_iran())
-                await p_arch.execute()
-                if tid in order_ids: order_ids.remove(tid)
-                continue
-        break
+    # --- 0. NOTE: No implicit dispatch here ---
+    # Keep rebuild_prep_state side-effect free for queue/wait-list transitions.
+    # Ready-ticket dispatch is handled by the canonical task:
+    # application.tasks.auto_dispatch_ready_tickets
 
     # --- 1. URGENT LOCK ---
     if u_prep_raw:
