@@ -1,8 +1,10 @@
 import json
 import asyncio
+import logging
 from application.tasks import report_to_admin_api
 from application.helpers import endpoint_helper
 from application.setting import settings
+import aiomqtt
 
 MQTT_BAKERY_PREFIX = "bakery/{0}"
 MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
@@ -11,8 +13,23 @@ MQTT_UPDATE_HAS_UPCOMING_CUSTOMER_IN_QUEUE = f"{MQTT_BAKERY_PREFIX}/has_upcoming
 MQTT_NEW_TICKET = f"{MQTT_BAKERY_PREFIX}/new_ticket"
 MQTT_CALL_CUSTOMER = f"{MQTT_BAKERY_PREFIX}/call_customer"
 MQTT_PRINT_TICKET = f"{MQTT_BAKERY_PREFIX}/print_ticket"
+MQTT_TICKET_JOB = f"{MQTT_BAKERY_PREFIX}/ticket_job"
 
 mqtt_connected = asyncio.Event()
+logger = logging.getLogger(__name__)
+
+
+async def _publish_with_qos_fallback(client, topic: str, msg: str):
+    """Publish with QoS1 first; fallback to QoS0 on timeout to avoid dropped user flow."""
+    try:
+        await client.publish(topic, msg, qos=1)
+        return
+    except aiomqtt.MqttError as e:
+        if "timed out" not in str(e).lower():
+            raise
+        logger.warning("mqtt publish QoS1 timed out, retrying QoS0 topic=%s", topic)
+
+    await client.publish(topic, msg, qos=0)
 
 async def mqtt_handler(app):
     client = app.state.mqtt_client
@@ -31,6 +48,11 @@ async def mqtt_handler(app):
                             f"\nPayload: {payload}")
                     report_to_admin_api.delay(text, message_thread_id=settings.HARDWARE_CLIENT_ERROR_THREAD_ID)
 
+        except aiomqtt.MqttError as e:
+            mqtt_connected.clear()  # Signal disconnection
+            # Broker may not be ready yet during startup; avoid noisy error reporting.
+            logger.warning("mqtt_client:mqtt_handler reconnecting after mqtt error: %s", e)
+            await asyncio.sleep(5)
         except Exception as e:
             mqtt_connected.clear()  # Signal disconnection
             await endpoint_helper.log_and_report_error('mqtt_client:mqtt_handler', e)
@@ -42,7 +64,7 @@ async def safe_publish(request, topic: str, payload: dict):
     try:
         await mqtt_connected.wait()
         msg = json.dumps(payload)
-        await request.app.state.mqtt_client.publish(topic, msg, qos=1)
+        await _publish_with_qos_fallback(request.app.state.mqtt_client, topic, msg)
     except Exception as e:
         await endpoint_helper.log_and_report_error(f'mqtt_client:safe_publish:{topic}', e)
 
@@ -75,3 +97,34 @@ async def call_customer(request, bakery_id: int, ticket_id: int):
 async def print_ticket(request, bakery_id: int, ticket_id: int, token: str):
     topic = MQTT_PRINT_TICKET.format(bakery_id)
     await safe_publish(request, topic, {"bakery_id": int(bakery_id), "ticket_id": int(ticket_id), "token": str(token)})
+
+
+async def publish_ticket_job(request, bakery_id: int, ticket_id: int, token: str, print_ticket: bool, show_on_display: bool):
+    topic = MQTT_TICKET_JOB.format(bakery_id)
+    payload = {
+        "bakery_id": int(bakery_id),
+        "ticket_id": int(ticket_id),
+        "token": str(token),
+        "print": bool(print_ticket),
+        "show_on_display": bool(show_on_display),
+    }
+    await safe_publish(request, topic, payload)
+
+
+async def publish_ticket_job_background(bakery_id: int, ticket_id: int, token: str, print_ticket: bool, show_on_display: bool):
+    """Publish ticket_job from non-request contexts (e.g., Celery tasks)."""
+    topic = MQTT_TICKET_JOB.format(bakery_id)
+    payload = {
+        "bakery_id": int(bakery_id),
+        "ticket_id": int(ticket_id),
+        "token": str(token),
+        "print": bool(print_ticket),
+        "show_on_display": bool(show_on_display),
+    }
+    try:
+        async with aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT, timeout=30) as client:
+            await _publish_with_qos_fallback(client, topic, json.dumps(payload))
+    except aiomqtt.MqttError as e:
+        logger.warning("mqtt_client:publish_ticket_job_background failed (mqtt): %s", e)
+    except Exception as e:
+        await endpoint_helper.log_and_report_error(f'mqtt_client:publish_ticket_job_background:{topic}', e)
