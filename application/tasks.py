@@ -192,16 +192,6 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
     auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
 
 
-
-
-@celery_app.task(bind=True)
-@handle_task_errors
-def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
-    """Schedule a one-shot auto-dispatch check using Celery countdown."""
-    delay = max(0, int(countdown_s or 0))
-    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
-
-
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
@@ -279,19 +269,6 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                             extra={"bakery_id": current_bakery_id},
                         )
                         snapshot = await _log_auto_dispatch_state_snapshot(current_bakery_id, "no_best_ticket")
-                        if snapshot["breads_zcard"] > 0 and snapshot["reservation_hlen"] == 0:
-                            anomaly_key = f"bakery:{current_bakery_id}:auto_dispatch_anomaly:no_order_with_breads"
-                            if await r.set(anomaly_key, "1", nx=True, ex=60):
-                                report_to_admin_api.delay(
-                                    f"[⚠️ AUTO-DISPATCH ANOMALY]"
-                                    f"\nBakery ID: {current_bakery_id}"
-                                    f"\nReason: no best ticket while breads exist"
-                                    f"\norder_preview: {snapshot['order_preview']}"
-                                    f"\nreservation_hlen: {snapshot['reservation_hlen']}"
-                                    f"\nbreads_zcard: {snapshot['breads_zcard']}"
-                                    f"\nbase_done_preview: {snapshot['base_done_preview']}",
-                                    settings.ERR_THREAD_ID,
-                                )
                         continue
                     if not bool(best.get("ready")):
                         celery_logger.info(
@@ -299,18 +276,6 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                             extra={"bakery_id": current_bakery_id, "best": best},
                         )
                         snapshot = await _log_auto_dispatch_state_snapshot(current_bakery_id, "best_ticket_not_ready")
-                        if snapshot["reservation_hlen"] > 0 and not snapshot["order_preview"]:
-                            anomaly_key = f"bakery:{current_bakery_id}:auto_dispatch_anomaly:reservation_without_order"
-                            if await r.set(anomaly_key, "1", nx=True, ex=60):
-                                report_to_admin_api.delay(
-                                    f"[⚠️ AUTO-DISPATCH ANOMALY]"
-                                    f"\nBakery ID: {current_bakery_id}"
-                                    f"\nReason: reservation exists but order is empty"
-                                    f"\nreservation_hlen: {snapshot['reservation_hlen']}"
-                                    f"\norder_preview: {snapshot['order_preview']}"
-                                    f"\nbreads_zcard: {snapshot['breads_zcard']}",
-                                    settings.ERR_THREAD_ID,
-                                )
                         continue
 
                     ticket_id = int(best["ticket_id"])
@@ -392,23 +357,23 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                             extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id, "customer_id": customer_id},
                         )
 
+                    msg = build_wait_list_telegram_message(ticket_id, current_bakery_id, "auto_dispatch")
+                    celery_logger.info(
+                        "auto_dispatch sending telegram wait-list report",
+                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                    )
+                    report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
+                    celery_logger.info(
+                        "auto_dispatch telegram wait-list report queued",
+                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                    )
+
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
                         remove_customer_from_upcoming_customers.delay(ticket_id, current_bakery_id)
 
                     with SessionLocal() as db:
                         crud.consume_breads_for_customer_today(db, current_bakery_id, ticket_id)
-
-                    msg = build_wait_list_telegram_message(ticket_id, current_bakery_id, "auto_dispatch")
-                    celery_logger.info(
-                        "auto_dispatch sending telegram wait-list report",
-                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
-                    )
-                    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
-                    celery_logger.info(
-                        "auto_dispatch telegram wait-list report sent",
-                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
-                    )
                 except Exception as e:
                     tb = traceback.format_exc()
                     celery_logger.error(
