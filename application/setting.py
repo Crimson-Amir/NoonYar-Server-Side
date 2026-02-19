@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 
     # Celery
     CELERY_BROKER_URL: str
+    ENABLE_AUTO_DISPATCH_READY_TICKETS: bool = True
 
     class Config:
         env_file = "../.env"  # only needed for local/dev; ignored in Docker if env vars already set
