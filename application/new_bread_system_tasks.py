@@ -203,10 +203,16 @@ def complete_bread_baking(self, bakery_id: int, ticket_number: int, bread_index:
                     None
                 )
                 if ticket and ticket.is_fully_baked():
-                    # Trigger auto-dispatch if needed
+                    # Trigger wait-list move through existing task path.
                     from application import tasks
                     tasks.send_ticket_to_wait_list.delay(ticket_number, bakery_id, "new_bread_system")
-
+                    report_to_admin_api(
+                        f"📌 Ticket Sent To Wait List"
+                        f"\n• Bakery Id: {int(bakery_id)}"
+                        f"\n• Ticket Number: {int(ticket_number)}"
+                        f"\n• Source: new_bread_system",
+                        settings.BAKERY_TICKET_THREAD_ID,
+                    )
                 return {"status": "bread_ready", "ticket_number": ticket_number}
 
             return {"status": "not_found"}
