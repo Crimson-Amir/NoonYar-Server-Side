@@ -172,9 +172,14 @@ async def new_ticket(
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display, "token": customer_token})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token, note)
 
-    await mqtt_client.notify_new_ticket(request, bakery_id, customer_ticket_id, customer_token)
-
-    await mqtt_client.print_ticket(request, bakery_id, customer_ticket_id, customer_token)
+    await mqtt_client.publish_ticket_job(
+        request,
+        bakery_id=bakery_id,
+        ticket_id=customer_ticket_id,
+        token=customer_token,
+        print_ticket=True,
+        show_on_display=False,
+    )
 
     # Telegram log: new ticket
     bread_names = await redis_helper.get_bakery_bread_names(r)
@@ -692,7 +697,11 @@ async def send_ticket_to_wait_list(
         customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
-    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, "manual_endpoint")
+    db_waitlist_task = tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, "manual_endpoint")
+    logger.info(
+        "Queued DB wait-list sync task",
+        extra={"bakery_id": int(bakery_id), "customer_id": int(customer_id), "task_id": db_waitlist_task.id},
+    )
 
     if any(bread in time_per_bread.keys() for bread in upcoming_breads):
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)
