@@ -49,29 +49,6 @@ def get_urgent_item_key(bakery_id: int, urgent_id: str) -> str:
 
 
 
-def _parse_reservation_counts(value):
-    """Normalize reservation vector stored as CSV string, list/tuple, or JSON-like string."""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [int(x) for x in value]
-    if isinstance(value, tuple):
-        return [int(x) for x in value]
-
-    txt = str(value).strip()
-    if not txt:
-        return []
-    if txt.startswith('[') and txt.endswith(']'):
-        try:
-            import json
-            parsed = json.loads(txt)
-            if isinstance(parsed, list):
-                return [int(x) for x in parsed]
-        except Exception:
-            pass
-
-    return [int(x) for x in txt.split(',') if str(x).strip() != '']
-
 def _normalize_redis_id(v) -> Optional[str]:
     if v is None:
         return None
@@ -1358,7 +1335,7 @@ async def calculate_ready_status(
 
     baking_time_s = int(baking_time_s_raw) if baking_time_s_raw else 0
     order_ids = [int(x) for x in reservation_keys]
-    reservation_dict = {int(k): _parse_reservation_counts(v) for k, v in reservation_dict.items()}
+    reservation_dict = {int(k): [int(x) for x in v.split(',')] for k, v in reservation_dict.items()}
     reservation_keys = sorted(reservation_dict.keys())
 
     base_done_ids = set(int(x) for x in (base_done_raw or []) if x is not None)

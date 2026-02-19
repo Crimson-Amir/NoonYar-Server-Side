@@ -188,8 +188,13 @@ async def queue_check(
             for bid, count in zip(bread_ids_sorted, calc_counts)
         }
 
+    reservation_dict_for_calc = {
+        int(k): (",".join(map(str, v)) if isinstance(v, (list, tuple)) else str(v))
+        for k, v in reservation_dict.items()
+    }
+
     ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
-        r, bakery_id, user_breads, bread_time, reservation_keys, reservation_number, reservation_dict
+        r, bakery_id, user_breads, bread_time, reservation_keys, reservation_number, reservation_dict_for_calc
     )
 
     return {
