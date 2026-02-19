@@ -24,7 +24,8 @@ celery_app = Celery(
 
 @celery_app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs):
-    # Disabled per request: rely on explicit triggers instead of periodic auto-dispatch.
+    # Disabled: wait-list transition is handled by new-bread timers/checks.
+    # Keep task callable for explicit/manual triggers only.
     return None
 
 
