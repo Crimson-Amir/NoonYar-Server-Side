@@ -47,6 +47,8 @@ def get_urgent_item_key(bakery_id: int, urgent_id: str) -> str:
     return f"bakery:{bakery_id}:urgent_item:{urgent_id}"
 
 
+
+
 def _normalize_redis_id(v) -> Optional[str]:
     if v is None:
         return None
