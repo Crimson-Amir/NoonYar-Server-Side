@@ -24,8 +24,9 @@ celery_app = Celery(
 
 @celery_app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs):
-    # Run every 5 seconds to dispatch any ready tickets to wait list.
-    sender.add_periodic_task(5.0, auto_dispatch_ready_tickets.s(), name="auto_dispatch_ready_tickets_every_5s")
+    # Disabled: wait-list transition is handled by new-bread timers/checks.
+    # Keep task callable for explicit/manual triggers only.
+    return None
 
 
 @contextmanager
@@ -60,6 +61,16 @@ def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mod
         # proxies=proxies,
     )
     response.raise_for_status()
+
+
+
+def build_wait_list_telegram_message(ticket_id: int, bakery_id: int, source: str) -> str:
+    return (
+        f"📌 Ticket Sent To Wait List"
+        f"\n• Bakery Id: {int(bakery_id)}"
+        f"\n• Ticket Number: {int(ticket_id)}"
+        f"\n• Source: {str(source)}"
+    )
 
 def handle_task_errors(func):
     @functools.wraps(func)
@@ -133,12 +144,7 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id, source: str = "system")
 
         crud.add_new_ticket_to_wait_list(db, customer_id, True)
 
-    msg = (
-        f"📌 Ticket Sent To Wait List"
-        f"\n• Bakery Id: {int(bakery_id)}"
-        f"\n• Ticket Number: {int(ticket_id)}"
-        f"\n• Source: {str(source)}"
-    )
+    msg = build_wait_list_telegram_message(ticket_id, bakery_id, source)
     report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
 
 
@@ -187,16 +193,6 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
     auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
 
 
-
-
-@celery_app.task(bind=True)
-@handle_task_errors
-def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
-    """Schedule a one-shot auto-dispatch check using Celery countdown."""
-    delay = max(0, int(countdown_s or 0))
-    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
-
-
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
@@ -217,20 +213,77 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                 for bakery in bakeries or []:
                     target_bakery_ids.append(int(getattr(bakery, "bakery_id", bakery)))
 
+            celery_logger.info(
+                "auto_dispatch_ready_tickets started",
+                extra={"target_bakery_id": target_bakery_id, "resolved_bakery_ids": target_bakery_ids},
+            )
+
+            async def _log_auto_dispatch_state_snapshot(current_bakery_id: int, reason: str):
+                order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(current_bakery_id)
+                res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(current_bakery_id)
+                breads_key = redis_helper.REDIS_KEY_BREADS.format(current_bakery_id)
+                base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(current_bakery_id)
+
+                pipe_dbg = r.pipeline()
+                pipe_dbg.zrange(order_key, 0, 9)
+                pipe_dbg.hlen(res_key)
+                pipe_dbg.zcard(breads_key)
+                pipe_dbg.smembers(base_done_key)
+                order_preview, reservation_hlen, breads_zcard, base_done_raw = await pipe_dbg.execute()
+
+                base_done_preview = sorted([int(x) for x in (base_done_raw or []) if str(x).isdigit()])[:10]
+                order_preview = [int(x) for x in (order_preview or []) if str(x).isdigit()]
+
+                snapshot = {
+                    "bakery_id": current_bakery_id,
+                    "reason": reason,
+                    "order_preview": order_preview,
+                    "reservation_hlen": int(reservation_hlen or 0),
+                    "breads_zcard": int(breads_zcard or 0),
+                    "base_done_preview": base_done_preview,
+                }
+
+                celery_logger.info("auto_dispatch state snapshot", extra=snapshot)
+                return snapshot
+
             for current_bakery_id in target_bakery_ids:
+                celery_logger.info(
+                    "auto_dispatch bakery loop begin",
+                    extra={"bakery_id": current_bakery_id},
+                )
                 await redis_helper.rebuild_prep_state(r, current_bakery_id)
                 lock_key = f"bakery:{current_bakery_id}:auto_dispatch_lock"
                 lock_token = uuid4().hex
                 acquired = await r.set(lock_key, lock_token, nx=True, ex=10)
                 if not acquired:
+                    celery_logger.info(
+                        "auto_dispatch skipped because lock is already held",
+                        extra={"bakery_id": current_bakery_id, "lock_key": lock_key},
+                    )
                     continue
 
                 try:
                     best = await redis_helper.select_best_ticket_by_ready_time(r, current_bakery_id)
-                    if not best or not bool(best.get("ready")):
+                    if not best:
+                        celery_logger.info(
+                            "auto_dispatch no best ticket",
+                            extra={"bakery_id": current_bakery_id},
+                        )
+                        snapshot = await _log_auto_dispatch_state_snapshot(current_bakery_id, "no_best_ticket")
+                        continue
+                    if not bool(best.get("ready")):
+                        celery_logger.info(
+                            "auto_dispatch best ticket is not ready",
+                            extra={"bakery_id": current_bakery_id, "best": best},
+                        )
+                        snapshot = await _log_auto_dispatch_state_snapshot(current_bakery_id, "best_ticket_not_ready")
                         continue
 
                     ticket_id = int(best["ticket_id"])
+                    celery_logger.info(
+                        "auto_dispatch selected ready ticket",
+                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id, "best": best},
+                    )
 
                     order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(current_bakery_id)
                     res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(current_bakery_id)
@@ -240,17 +293,35 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                     pipe.hdel(res_key, ticket_id)
                     pipe.zrem(order_key, ticket_id)
                     current_customer_reservation, r1, r2 = await pipe.execute()
+                    celery_logger.info(
+                        "auto_dispatch removed ticket from reservation structures",
+                        extra={
+                            "bakery_id": current_bakery_id,
+                            "ticket_id": ticket_id,
+                            "hdel_result": r1,
+                            "zrem_result": r2,
+                            "had_reservation_value": current_customer_reservation is not None,
+                        },
+                    )
 
                     if not bool(r1 and r2):
                         reservation_list = await redis_helper.get_bakery_reservations(
                             r, current_bakery_id, fetch_from_redis_first=False
                         )
                         if not reservation_list:
+                            celery_logger.info(
+                                "auto_dispatch fallback found no reservation list",
+                                extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                            )
                             continue
                         status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(
                             r, current_bakery_id, ticket_id
                         )
                         if not status:
+                            celery_logger.warning(
+                                "auto_dispatch fallback could not remove ticket",
+                                extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                            )
                             continue
 
                     queue_state = await redis_helper.load_queue_state(r, current_bakery_id)
@@ -263,12 +334,40 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                     await redis_helper.set_user_current_ticket(r, current_bakery_id, ticket_id)
                     await redis_helper.consume_ready_breads(r, current_bakery_id, ticket_id)
                     await redis_helper.rebuild_prep_state(r, current_bakery_id)
+                    celery_logger.info(
+                        "auto_dispatch redis wait-list updates completed",
+                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                    )
 
                     _, time_per_bread, upcoming_breads = await redis_helper.get_customer_ticket_data_pipe_without_reservations_with_upcoming_breads(
                         r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, "auto_dispatch")
+                    with session_scope() as db:
+                        customer_id = crud.update_customer_status_to_false(db, ticket_id, current_bakery_id)
+                        if customer_id is None:
+                            customer = crud.get_customer_by_ticket_id_any_status(db, ticket_id, current_bakery_id)
+                            customer_id = customer.id if customer else None
+                        if customer_id is None:
+                            raise ValueError(
+                                f"Customer not found for ticket_id={ticket_id}, bakery_id={current_bakery_id}"
+                            )
+                        crud.add_new_ticket_to_wait_list(db, customer_id, True)
+                        celery_logger.info(
+                            "auto_dispatch db wait-list update completed",
+                            extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id, "customer_id": customer_id},
+                        )
+
+                    msg = build_wait_list_telegram_message(ticket_id, current_bakery_id, "auto_dispatch")
+                    celery_logger.info(
+                        "auto_dispatch sending telegram wait-list report",
+                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                    )
+                    report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
+                    celery_logger.info(
+                        "auto_dispatch telegram wait-list report queued",
+                        extra={"bakery_id": current_bakery_id, "ticket_id": ticket_id},
+                    )
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
@@ -276,17 +375,42 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
 
                     with SessionLocal() as db:
                         crud.consume_breads_for_customer_today(db, current_bakery_id, ticket_id)
-
-                    msg = (
-                        f"Bakery ID: {current_bakery_id}"
-                        f"\nTicket Number: {ticket_id}"
-                        f"\nAction: auto-dispatch to wait list"
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    celery_logger.error(
+                        "Auto dispatch failed for bakery",
+                        extra={
+                            "bakery_id": current_bakery_id,
+                            "error": str(e),
+                            "traceback": tb,
+                        },
                     )
-                    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+                    report_to_admin_api.delay(
+                        f"[🔴 ERROR] auto_dispatch_ready_tickets"
+                        f"\nBakery ID: {current_bakery_id}"
+                        f"\nReason: {str(e)}"
+                        f"\nTraceback:\n{tb[-2500:]}",
+                        settings.ERR_THREAD_ID,
+                    )
+                    continue
                 finally:
                     current_token = await r.get(lock_key)
                     if current_token == lock_token:
                         await r.delete(lock_key)
+                        celery_logger.info(
+                            "auto_dispatch released lock",
+                            extra={"bakery_id": current_bakery_id, "lock_key": lock_key},
+                        )
+                    else:
+                        celery_logger.warning(
+                            "auto_dispatch lock token changed before release",
+                            extra={
+                                "bakery_id": current_bakery_id,
+                                "lock_key": lock_key,
+                                "expected_token": lock_token,
+                                "current_token": current_token,
+                            },
+                        )
 
         finally:
             await r.close()
