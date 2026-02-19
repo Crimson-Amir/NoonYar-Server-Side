@@ -692,7 +692,11 @@ async def send_ticket_to_wait_list(
         customer_reservation = await redis_helper.get_current_cusomter_detail(r, bakery_id, next_ticket_id, time_per_bread, customer_reservation)
         next_user_detail = await redis_helper.get_customer_reservation_detail(time_per_bread, customer_reservation)
 
-    tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, "manual_endpoint")
+    db_waitlist_task = tasks.send_ticket_to_wait_list.delay(customer_id, bakery_id, "manual_endpoint")
+    logger.info(
+        "Queued DB wait-list sync task",
+        extra={"bakery_id": int(bakery_id), "customer_id": int(customer_id), "task_id": db_waitlist_task.id},
+    )
 
     if any(bread in time_per_bread.keys() for bread in upcoming_breads):
         await redis_helper.remove_customer_from_upcoming_customers(r, bakery_id, customer_id)

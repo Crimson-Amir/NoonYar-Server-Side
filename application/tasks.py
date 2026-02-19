@@ -25,7 +25,11 @@ celery_app = Celery(
 @celery_app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs):
     # Run every 5 seconds to dispatch any ready tickets to wait list.
-    sender.add_periodic_task(5.0, auto_dispatch_ready_tickets.s(), name="auto_dispatch_ready_tickets_every_5s")
+    if settings.ENABLE_AUTO_DISPATCH_READY_TICKETS:
+        sender.add_periodic_task(5.0, auto_dispatch_ready_tickets.s(), name="auto_dispatch_ready_tickets_every_5s")
+        celery_logger.info("Periodic auto-dispatch is enabled")
+    else:
+        celery_logger.info("Periodic auto-dispatch is disabled by configuration")
 
 
 @contextmanager
@@ -122,6 +126,10 @@ def serve_wait_list_ticket(self, ticket_id, bakery_id):
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
 @handle_task_errors
 def send_ticket_to_wait_list(self, ticket_id, bakery_id, source: str = "system"):
+    celery_logger.info(
+        "send_ticket_to_wait_list started",
+        extra={"bakery_id": int(bakery_id), "ticket_id": int(ticket_id), "source": str(source)},
+    )
     with session_scope() as db:
         customer_id = crud.update_customer_status_to_false(db, ticket_id, bakery_id)
         if customer_id is None:
@@ -132,6 +140,11 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id, source: str = "system")
             raise ValueError(f"Customer not found for ticket_id={ticket_id}, bakery_id={bakery_id}")
 
         crud.add_new_ticket_to_wait_list(db, customer_id, True)
+
+    celery_logger.info(
+        "send_ticket_to_wait_list persisted to DB",
+        extra={"bakery_id": int(bakery_id), "ticket_id": int(ticket_id), "customer_id": int(customer_id)},
+    )
 
     msg = (
         f"📌 Ticket Sent To Wait List"
@@ -187,16 +200,6 @@ def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
     auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
 
 
-
-
-@celery_app.task(bind=True)
-@handle_task_errors
-def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
-    """Schedule a one-shot auto-dispatch check using Celery countdown."""
-    delay = max(0, int(countdown_s or 0))
-    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
-
-
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
@@ -223,11 +226,19 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                 lock_token = uuid4().hex
                 acquired = await r.set(lock_key, lock_token, nx=True, ex=10)
                 if not acquired:
+                    celery_logger.info(
+                        "auto_dispatch_ready_tickets skipped because lock is held",
+                        extra={"bakery_id": current_bakery_id, "lock_key": lock_key},
+                    )
                     continue
 
                 try:
                     best = await redis_helper.select_best_ticket_by_ready_time(r, current_bakery_id)
                     if not best or not bool(best.get("ready")):
+                        celery_logger.info(
+                            "auto_dispatch_ready_tickets no ready ticket",
+                            extra={"bakery_id": current_bakery_id, "best": best},
+                        )
                         continue
 
                     ticket_id = int(best["ticket_id"])
@@ -268,7 +279,15 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         r, current_bakery_id
                     )
 
-                    send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, "auto_dispatch")
+                    db_waitlist_task = send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, "auto_dispatch")
+                    celery_logger.info(
+                        "auto_dispatch_ready_tickets moved ticket to wait list",
+                        extra={
+                            "bakery_id": current_bakery_id,
+                            "ticket_id": ticket_id,
+                            "db_waitlist_task_id": db_waitlist_task.id,
+                        },
+                    )
 
                     if time_per_bread and any(bread in time_per_bread.keys() for bread in (upcoming_breads or [])):
                         await redis_helper.remove_customer_from_upcoming_customers(r, current_bakery_id, ticket_id)
