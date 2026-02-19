@@ -188,14 +188,31 @@ def send_otp(self, mobile_number, code, expire_m=10):
 @celery_app.task(bind=True)
 @handle_task_errors
 def schedule_auto_dispatch(self, bakery_id: int, countdown_s: int = 0):
-    """Schedule a one-shot auto-dispatch check using Celery countdown."""
-    delay = max(0, int(countdown_s or 0))
-    auto_dispatch_ready_tickets.apply_async(kwargs={"bakery_id": int(bakery_id)}, countdown=delay)
+    """Deprecated: auto-dispatch is disabled in favor of the new bread-system tasks."""
+    celery_logger.info(
+        "schedule_auto_dispatch skipped (deprecated)",
+        extra={"bakery_id": int(bakery_id), "countdown_s": int(countdown_s or 0)},
+    )
+    return {
+        "status": "skipped",
+        "reason": "auto_dispatch_ready_tickets is disabled; new bread system handles ready->wait-list flow",
+    }
 
 
 @celery_app.task(bind=True)
 @handle_task_errors
 def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
+    celery_logger.info(
+        "auto_dispatch_ready_tickets skipped (disabled)",
+        extra={
+            "bakery_id": bakery_id,
+            "reason": "new bread system tasks are authoritative for ready-ticket dispatch",
+        },
+    )
+    return {
+        "status": "skipped",
+        "reason": "disabled in favor of new bread system tasks",
+    }
 
     async def _task(target_bakery_id: int | None):
         r = aioredis.from_url(

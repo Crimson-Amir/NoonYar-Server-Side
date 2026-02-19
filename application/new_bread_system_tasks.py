@@ -99,6 +99,64 @@ async def save_bread_system(r, bakery_id: int, system: BakeryQueueSystem) -> Non
     await r.set(key, json.dumps(data, ensure_ascii=False), ex=ttl)
 
 
+
+
+async def dispatch_ticket_to_wait_list_if_ready(r, bakery_id: int, ticket_number: int, source: str) -> bool:
+    """Move a fully-baked ticket to wait list in Redis + DB (idempotent best-effort)."""
+    wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
+    if await r.hexists(wait_list_key, str(ticket_number)):
+        return False
+
+    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
+    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
+
+    pipe = r.pipeline()
+    pipe.hget(res_key, str(ticket_number))
+    pipe.hdel(res_key, ticket_number)
+    pipe.zrem(order_key, ticket_number)
+    current_customer_reservation, r1, r2 = await pipe.execute()
+
+    if not bool(r1 and r2):
+        reservation_list = await redis_helper.get_bakery_reservations(
+            r, bakery_id, fetch_from_redis_first=False
+        )
+        if reservation_list:
+            status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(
+                r, bakery_id, ticket_number
+            )
+            if not status:
+                current_customer_reservation = None
+
+    queue_state = await redis_helper.load_queue_state(r, bakery_id)
+    queue_state.mark_ticket_served(ticket_number)
+    await redis_helper.save_queue_state(r, bakery_id, queue_state)
+
+    await redis_helper.add_customer_to_wait_list(
+        r, bakery_id, ticket_number, reservations_str=current_customer_reservation
+    )
+    await redis_helper.set_user_current_ticket(r, bakery_id, ticket_number)
+    await redis_helper.consume_ready_breads(r, bakery_id, ticket_number)
+    await redis_helper.rebuild_prep_state(r, bakery_id)
+
+    with SessionLocal() as db:
+        customer_id = crud.update_customer_status_to_false(db, ticket_number, bakery_id)
+        if customer_id is None:
+            customer = crud.get_customer_by_ticket_id_any_status(db, ticket_number, bakery_id)
+            customer_id = customer.id if customer else None
+        if customer_id is None:
+            raise ValueError(f"Customer not found for ticket_id={ticket_number}, bakery_id={bakery_id}")
+        crud.add_new_ticket_to_wait_list(db, customer_id, True)
+        crud.consume_breads_for_customer_today(db, bakery_id, ticket_number)
+
+    report_to_admin_api(
+        f"📌 Ticket Sent To Wait List"
+        f"\n• Bakery Id: {int(bakery_id)}"
+        f"\n• Ticket Number: {int(ticket_number)}"
+        f"\n• Source: {source}",
+        settings.BAKERY_TICKET_THREAD_ID,
+    )
+
+    return True
 # --- Celery Tasks for New Bread System ---
 
 
@@ -121,18 +179,21 @@ def check_baking_breads(self, bakery_id: int):
             if newly_ready:
                 await save_bread_system(r, bakery_id, system)
 
-                # Log the ready tickets
-                for ticket_num in newly_ready:
-                    msg = f"🍞 Ticket #{ticket_num} is READY for delivery!"
-                    celery_logger.info(msg, extra={"bakery_id": bakery_id, "ticket_number": ticket_num})
+            dispatched_tickets = []
+            for ticket in system.all_tickets_history:
+                if ticket.is_cancelled or ticket.is_delivered:
+                    continue
+                if not ticket.is_fully_baked():
+                    continue
 
-                    # Notify via Telegram
-                    report_to_admin_api.delay(
-                        f"Bakery ID: {bakery_id}\nTicket Number: {ticket_num}\nStatus: Ready for delivery",
-                        settings.BAKERY_TICKET_THREAD_ID
-                    )
+                ticket_num = int(ticket.number)
+                moved = await dispatch_ticket_to_wait_list_if_ready(
+                    r, bakery_id, ticket_num, source="new_bread_system_periodic_5s"
+                )
+                if moved:
+                    dispatched_tickets.append(ticket_num)
 
-            return {"newly_ready_tickets": newly_ready}
+            return {"newly_ready_tickets": newly_ready, "dispatched_tickets": dispatched_tickets}
         finally:
             await r.close()
 
@@ -203,54 +264,8 @@ def complete_bread_baking(self, bakery_id: int, ticket_number: int, bread_index:
                     None
                 )
                 if ticket and ticket.is_fully_baked():
-                    # Move fully-baked ticket to wait list in both Redis and DB.
-                    order_key = redis_helper.REDIS_KEY_RESERVATION_ORDER.format(bakery_id)
-                    res_key = redis_helper.REDIS_KEY_RESERVATIONS.format(bakery_id)
-
-                    pipe = r.pipeline()
-                    pipe.hget(res_key, str(ticket_number))
-                    pipe.hdel(res_key, ticket_number)
-                    pipe.zrem(order_key, ticket_number)
-                    current_customer_reservation, r1, r2 = await pipe.execute()
-
-                    if not bool(r1 and r2):
-                        reservation_list = await redis_helper.get_bakery_reservations(
-                            r, bakery_id, fetch_from_redis_first=False
-                        )
-                        if reservation_list:
-                            status, current_customer_reservation = await redis_helper.remove_customer_id_from_reservation(
-                                r, bakery_id, ticket_number
-                            )
-                            if not status:
-                                current_customer_reservation = None
-
-                    queue_state = await redis_helper.load_queue_state(r, bakery_id)
-                    queue_state.mark_ticket_served(ticket_number)
-                    await redis_helper.save_queue_state(r, bakery_id, queue_state)
-
-                    await redis_helper.add_customer_to_wait_list(
-                        r, bakery_id, ticket_number, reservations_str=current_customer_reservation
-                    )
-                    await redis_helper.set_user_current_ticket(r, bakery_id, ticket_number)
-                    await redis_helper.consume_ready_breads(r, bakery_id, ticket_number)
-                    await redis_helper.rebuild_prep_state(r, bakery_id)
-
-                    with SessionLocal() as db:
-                        customer_id = crud.update_customer_status_to_false(db, ticket_number, bakery_id)
-                        if customer_id is None:
-                            customer = crud.get_customer_by_ticket_id_any_status(db, ticket_number, bakery_id)
-                            customer_id = customer.id if customer else None
-                        if customer_id is None:
-                            raise ValueError(f"Customer not found for ticket_id={ticket_number}, bakery_id={bakery_id}")
-                        crud.add_new_ticket_to_wait_list(db, customer_id, True)
-                        crud.consume_breads_for_customer_today(db, bakery_id, ticket_number)
-
-                    report_to_admin_api(
-                        f"📌 Ticket Sent To Wait List"
-                        f"\n• Bakery Id: {int(bakery_id)}"
-                        f"\n• Ticket Number: {int(ticket_number)}"
-                        f"\n• Source: new_bread_system",
-                        settings.BAKERY_TICKET_THREAD_ID,
+                    await dispatch_ticket_to_wait_list_if_ready(
+                        r, bakery_id, int(ticket_number), source="new_bread_system_timer"
                     )
 
                 return {"status": "bread_ready", "ticket_number": ticket_number}
