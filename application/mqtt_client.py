@@ -59,14 +59,27 @@ async def mqtt_handler(app):
             await asyncio.sleep(5)
 
 
-async def safe_publish(request, topic: str, payload: dict):
-    """Waits for MQTT connection and publishes a payload safely, logging any errors."""
+async def safe_publish(request, topic: str, payload: dict) -> bool:
+    """Try to publish quickly; never block request flow for long."""
     try:
-        await mqtt_connected.wait()
+        await asyncio.wait_for(mqtt_connected.wait(), timeout=float(settings.MQTT_PUBLISH_TIMEOUT_S))
+    except asyncio.TimeoutError:
+        logger.warning("mqtt not connected within timeout, skip publish topic=%s", topic)
+        return False
+
+    try:
         msg = json.dumps(payload)
-        await _publish_with_qos_fallback(request.app.state.mqtt_client, topic, msg)
+        await asyncio.wait_for(
+            _publish_with_qos_fallback(request.app.state.mqtt_client, topic, msg),
+            timeout=float(settings.MQTT_PUBLISH_TIMEOUT_S),
+        )
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("mqtt publish timed out after %.2fs topic=%s", float(settings.MQTT_PUBLISH_TIMEOUT_S), topic)
+        return False
     except Exception as e:
         await endpoint_helper.log_and_report_error(f'mqtt_client:safe_publish:{topic}', e)
+        return False
 
 
 async def update_time_per_bread(request, bakery_id, new_config):
@@ -123,7 +136,10 @@ async def publish_ticket_job_background(bakery_id: int, ticket_id: int, token: s
     }
     try:
         async with aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT, timeout=30) as client:
-            await _publish_with_qos_fallback(client, topic, json.dumps(payload))
+            await asyncio.wait_for(
+                _publish_with_qos_fallback(client, topic, json.dumps(payload)),
+                timeout=float(settings.MQTT_PUBLISH_TIMEOUT_S),
+            )
     except aiomqtt.MqttError as e:
         logger.warning("mqtt_client:publish_ticket_job_background failed (mqtt): %s", e)
     except Exception as e:

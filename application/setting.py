@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # MQTT
     MQTT_BROKER_HOST: str
     MQTT_BROKER_PORT: int
+    MQTT_PUBLISH_TIMEOUT_S: float = 2.0
 
     # Redis
     REDIS_URL: str
