@@ -172,9 +172,14 @@ async def new_ticket(
     logger.info(f"{FILE_NAME}:new_cusomer", extra={"bakery_id": customer.bakery_id, "bread_requirements": bread_requirements, "customer_in_upcoming_customer": customer_in_upcoming_customer, "show_on_display": show_on_display, "token": customer_token})
     tasks.register_new_customer.delay(customer_ticket_id, customer.bakery_id, bread_requirements, customer_in_upcoming_customer, customer_token, note)
 
-    await mqtt_client.notify_new_ticket(request, bakery_id, customer_ticket_id, customer_token)
-
-    await mqtt_client.print_ticket(request, bakery_id, customer_ticket_id, customer_token)
+    await mqtt_client.publish_ticket_job(
+        request,
+        bakery_id=bakery_id,
+        ticket_id=customer_ticket_id,
+        token=customer_token,
+        print_ticket=True,
+        show_on_display=False,
+    )
 
     # Telegram log: new ticket
     bread_names = await redis_helper.get_bakery_bread_names(r)

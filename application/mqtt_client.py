@@ -11,6 +11,7 @@ MQTT_UPDATE_HAS_UPCOMING_CUSTOMER_IN_QUEUE = f"{MQTT_BAKERY_PREFIX}/has_upcoming
 MQTT_NEW_TICKET = f"{MQTT_BAKERY_PREFIX}/new_ticket"
 MQTT_CALL_CUSTOMER = f"{MQTT_BAKERY_PREFIX}/call_customer"
 MQTT_PRINT_TICKET = f"{MQTT_BAKERY_PREFIX}/print_ticket"
+MQTT_TICKET_JOB = f"{MQTT_BAKERY_PREFIX}/ticket_job"
 
 mqtt_connected = asyncio.Event()
 
@@ -75,3 +76,33 @@ async def call_customer(request, bakery_id: int, ticket_id: int):
 async def print_ticket(request, bakery_id: int, ticket_id: int, token: str):
     topic = MQTT_PRINT_TICKET.format(bakery_id)
     await safe_publish(request, topic, {"bakery_id": int(bakery_id), "ticket_id": int(ticket_id), "token": str(token)})
+
+
+async def publish_ticket_job(request, bakery_id: int, ticket_id: int, token: str, print_ticket: bool, show_on_display: bool):
+    topic = MQTT_TICKET_JOB.format(bakery_id)
+    payload = {
+        "bakery_id": int(bakery_id),
+        "ticket_id": int(ticket_id),
+        "token": str(token),
+        "print": bool(print_ticket),
+        "show_on_display": bool(show_on_display),
+    }
+    await safe_publish(request, topic, payload)
+
+
+async def publish_ticket_job_background(bakery_id: int, ticket_id: int, token: str, print_ticket: bool, show_on_display: bool):
+    """Publish ticket_job from non-request contexts (e.g., Celery tasks)."""
+    topic = MQTT_TICKET_JOB.format(bakery_id)
+    payload = {
+        "bakery_id": int(bakery_id),
+        "ticket_id": int(ticket_id),
+        "token": str(token),
+        "print": bool(print_ticket),
+        "show_on_display": bool(show_on_display),
+    }
+    try:
+        import aiomqtt
+        async with aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT, timeout=30) as client:
+            await client.publish(topic, json.dumps(payload), qos=1)
+    except Exception as e:
+        await endpoint_helper.log_and_report_error(f'mqtt_client:publish_ticket_job_background:{topic}', e)

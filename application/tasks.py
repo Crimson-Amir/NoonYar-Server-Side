@@ -279,6 +279,15 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         r, current_bakery_id
                     )
 
+                    from application import mqtt_client
+                    await mqtt_client.publish_ticket_job_background(
+                        bakery_id=current_bakery_id,
+                        ticket_id=ticket_id,
+                        token="does not matter",
+                        print_ticket=False,
+                        show_on_display=True,
+                    )
+
                     db_waitlist_task = send_ticket_to_wait_list.delay(ticket_id, current_bakery_id, "auto_dispatch")
                     celery_logger.info(
                         "auto_dispatch_ready_tickets moved ticket to wait list",
