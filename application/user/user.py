@@ -16,6 +16,26 @@ FILE_NAME = "user:user"
 handle_errors = endpoint_helper.handle_endpoint_errors(FILE_NAME)
 
 
+
+
+async def _calculate_ready_status_for_res(r, bakery_id: int, user_breads: dict | None, bread_time_for_calc: dict, reservation_keys: list, reservation_number: int, reservation_dict_for_calc: dict):
+    """Isolated adapter for /res: supports legacy tuple or new dict return from helper."""
+    result = await redis_helper.calculate_ready_status(
+        r, bakery_id, user_breads, bread_time_for_calc, reservation_keys, reservation_number, reservation_dict_for_calc
+    )
+
+    if isinstance(result, dict):
+        return (
+            bool(result.get("ready", False)),
+            bool(result.get("accurate_time", True)),
+            result.get("wait_until"),
+        )
+
+    if isinstance(result, (list, tuple)) and len(result) >= 3:
+        return bool(result[0]), bool(result[1]), result[2]
+
+    raise HTTPException(status_code=500, detail="Unexpected ready-status result format")
+
 def _parse_count_vector(value):
     """Normalize Redis/DB count vector that may be a CSV string or python list."""
     if value is None:
@@ -195,7 +215,7 @@ async def queue_check(
 
     bread_time_for_calc = {str(k): int(v) for k, v in bread_time.items()}
 
-    ready, accurate_time, wait_until = await redis_helper.calculate_ready_status(
+    ready, accurate_time, wait_until = await _calculate_ready_status_for_res(
         r, bakery_id, user_breads, bread_time_for_calc, reservation_keys, reservation_number, reservation_dict_for_calc
     )
 
