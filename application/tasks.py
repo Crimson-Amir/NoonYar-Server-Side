@@ -62,14 +62,12 @@ def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mod
             "https://api.telegram.org": proxy_url,
         }
 
-    with requests.Session() as session:
-        session.trust_env = False
-        response = session.post(
-            url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
-            json=json_data,
-            timeout=10,
-            proxies=proxies
-        )
+    response = requests.post(
+        url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
+        json=json_data,
+        timeout=10,
+        proxies=proxies
+    )
     response.raise_for_status()
 
 def handle_task_errors(func):
