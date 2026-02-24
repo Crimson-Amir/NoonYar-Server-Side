@@ -50,11 +50,16 @@ def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mod
     json_data = {'chat_id': settings.TELEGRAM_CHAT_ID, 'text': msg[:4096], 'message_thread_id': message_thread_id}
     if parse_mode:
         json_data['parse_mode'] = parse_mode
+    proxy_url = settings.TELEGRAM_PROXY_URL
+    if proxy_url:
+        proxy_url = proxy_url.strip().strip('"').strip("'")
+
     proxies = None
-    if settings.TELEGRAM_PROXY_URL:
+    if proxy_url:
         proxies = {
-            "http": settings.TELEGRAM_PROXY_URL,
-            "https": settings.TELEGRAM_PROXY_URL,
+            "http": proxy_url,
+            "https": proxy_url,
+            "https://api.telegram.org": proxy_url,
         }
 
     response = requests.post(
