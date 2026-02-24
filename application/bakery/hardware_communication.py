@@ -178,7 +178,7 @@ async def new_ticket(
         ticket_id=customer_ticket_id,
         token=customer_token,
         print_ticket=True,
-        show_on_display=False,
+        show_on_display=show_on_display,
     )
 
     # Telegram log: new ticket
