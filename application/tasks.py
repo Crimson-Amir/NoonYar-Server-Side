@@ -56,12 +56,11 @@ def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mod
             "http": settings.TELEGRAM_PROXY_URL,
             "https": settings.TELEGRAM_PROXY_URL,
         }
-
     response = requests.post(
         url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
         json=json_data,
         timeout=10,
-        # proxies=proxies,
+        proxies=proxies
     )
     response.raise_for_status()
 
@@ -152,7 +151,7 @@ def send_ticket_to_wait_list(self, ticket_id, bakery_id, source: str = "system")
         f"\n• Ticket Number: {int(ticket_id)}"
         f"\n• Source: {str(source)}"
     )
-    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+    report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
 
 
 @celery_app.task(bind=True, autoretry_for=(Exception,), retry_kwargs={"max_retries": 3, "countdown": 5})
@@ -310,7 +309,7 @@ def auto_dispatch_ready_tickets(self, bakery_id: int | None = None):
                         f"\nTicket Number: {ticket_id}"
                         f"\nAction: auto-dispatch to wait list"
                     )
-                    report_to_admin_api(msg, settings.BAKERY_TICKET_THREAD_ID)
+                    report_to_admin_api.delay(msg, settings.BAKERY_TICKET_THREAD_ID)
                 finally:
                     current_token = await r.get(lock_key)
                     if current_token == lock_token:
