@@ -56,6 +56,7 @@ def report_to_admin_api(msg, message_thread_id=settings.ERR_THREAD_ID, parse_mod
             "http": settings.TELEGRAM_PROXY_URL,
             "https": settings.TELEGRAM_PROXY_URL,
         }
+
     response = requests.post(
         url=f"https://api.telegram.org/bot{settings.TELEGRAM_TOKEN}/sendMessage",
         json=json_data,
