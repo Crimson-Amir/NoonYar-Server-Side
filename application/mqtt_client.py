@@ -1,10 +1,11 @@
 import json
 import asyncio
-import logging
+import time
 from application.tasks import report_to_admin_api
 from application.helpers import endpoint_helper
 from application.setting import settings
 import aiomqtt
+from application.logger_config import logger as app_logger
 
 MQTT_BAKERY_PREFIX = "bakery/{0}"
 MQTT_UPDATE_BREAD_TIME = f"{MQTT_BAKERY_PREFIX}/bread_time_update"
@@ -16,20 +17,35 @@ MQTT_PRINT_TICKET = f"{MQTT_BAKERY_PREFIX}/print_ticket"
 MQTT_TICKET_JOB = f"{MQTT_BAKERY_PREFIX}/ticket_job"
 
 mqtt_connected = asyncio.Event()
-logger = logging.getLogger(__name__)
+
+
+def _mqtt_log(level: str, event: str, **fields):
+    """Emit structured MQTT logs that are easy to filter from docker logs."""
+    message = f"mqtt:{event}"
+    if level == "warning":
+        app_logger.warning(message, extra=fields)
+    elif level == "error":
+        app_logger.error(message, extra=fields)
+    else:
+        app_logger.info(message, extra=fields)
 
 
 async def _publish_with_qos_fallback(client, topic: str, msg: str):
     """Publish with QoS1 first; fallback to QoS0 on timeout to avoid dropped user flow."""
     try:
+        _mqtt_log("info", "publish_qos1_attempt", topic=topic, payload=msg)
         await client.publish(topic, msg, qos=1)
+        _mqtt_log("info", "publish_qos1_ok", topic=topic)
         return
     except aiomqtt.MqttError as e:
         if "timed out" not in str(e).lower():
+            _mqtt_log("warning", "publish_qos1_error", topic=topic, error=str(e))
             raise
-        logger.warning("mqtt publish QoS1 timed out, retrying QoS0 topic=%s", topic)
+        _mqtt_log("warning", "publish_qos1_timeout_retry_qos0", topic=topic, error=str(e))
 
+    _mqtt_log("info", "publish_qos0_attempt", topic=topic, payload=msg)
     await client.publish(topic, msg, qos=0)
+    _mqtt_log("info", "publish_qos0_ok", topic=topic)
 
 async def mqtt_handler(app):
     client = app.state.mqtt_client
@@ -38,11 +54,13 @@ async def mqtt_handler(app):
             async with client:  # This keeps connection alive
                 mqtt_connected.set()  # Signal that we're connected
                 await client.subscribe("bakery/+/error")
+                _mqtt_log("info", "subscribed", topic="bakery/+/error")
 
                 async for message in client.messages:
                     topic = message.topic
                     payload = message.payload.decode()
                     bakery_id = str(topic).split('/')[1]
+                    _mqtt_log("warning", "incoming_error_message", topic=str(topic), bakery_id=bakery_id, payload=payload)
                     text = (f"[🔴 MQTT ERROR]:"
                             f"\n\nBakeryID: {bakery_id}"
                             f"\nPayload: {payload}")
@@ -51,7 +69,7 @@ async def mqtt_handler(app):
         except aiomqtt.MqttError as e:
             mqtt_connected.clear()  # Signal disconnection
             # Broker may not be ready yet during startup; avoid noisy error reporting.
-            logger.warning("mqtt_client:mqtt_handler reconnecting after mqtt error: %s", e)
+            _mqtt_log("warning", "handler_reconnecting_after_mqtt_error", error=str(e))
             await asyncio.sleep(5)
         except Exception as e:
             mqtt_connected.clear()  # Signal disconnection
@@ -61,10 +79,11 @@ async def mqtt_handler(app):
 
 async def safe_publish(request, topic: str, payload: dict) -> bool:
     """Try to publish quickly; never block request flow for long."""
+    started_at = time.monotonic()
     try:
         await asyncio.wait_for(mqtt_connected.wait(), timeout=float(settings.MQTT_PUBLISH_TIMEOUT_S))
     except asyncio.TimeoutError:
-        logger.warning("mqtt not connected within timeout, skip publish topic=%s", topic)
+        _mqtt_log("warning", "skip_publish_not_connected", topic=topic, timeout_s=float(settings.MQTT_PUBLISH_TIMEOUT_S), payload=payload)
         return False
 
     try:
@@ -73,11 +92,19 @@ async def safe_publish(request, topic: str, payload: dict) -> bool:
             _publish_with_qos_fallback(request.app.state.mqtt_client, topic, msg),
             timeout=float(settings.MQTT_PUBLISH_TIMEOUT_S),
         )
+        _mqtt_log(
+            "info",
+            "publish_success",
+            topic=topic,
+            payload=payload,
+            duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+        )
         return True
     except asyncio.TimeoutError:
-        logger.warning("mqtt publish timed out after %.2fs topic=%s", float(settings.MQTT_PUBLISH_TIMEOUT_S), topic)
+        _mqtt_log("warning", "publish_timeout", topic=topic, timeout_s=float(settings.MQTT_PUBLISH_TIMEOUT_S), payload=payload)
         return False
     except Exception as e:
+        _mqtt_log("error", "publish_exception", topic=topic, payload=payload, error=str(e))
         await endpoint_helper.log_and_report_error(f'mqtt_client:safe_publish:{topic}', e)
         return False
 
@@ -135,12 +162,15 @@ async def publish_ticket_job_background(bakery_id: int, ticket_id: int, token: s
         "show_on_display": bool(show_on_display),
     }
     try:
+        _mqtt_log("info", "background_publish_attempt", topic=topic, payload=payload)
         async with aiomqtt.Client(hostname=settings.MQTT_BROKER_HOST, port=settings.MQTT_BROKER_PORT, timeout=30) as client:
             await asyncio.wait_for(
                 _publish_with_qos_fallback(client, topic, json.dumps(payload)),
                 timeout=float(settings.MQTT_PUBLISH_TIMEOUT_S),
             )
+        _mqtt_log("info", "background_publish_success", topic=topic, payload=payload)
     except aiomqtt.MqttError as e:
-        logger.warning("mqtt_client:publish_ticket_job_background failed (mqtt): %s", e)
+        _mqtt_log("warning", "background_publish_mqtt_error", topic=topic, payload=payload, error=str(e))
     except Exception as e:
+        _mqtt_log("error", "background_publish_exception", topic=topic, payload=payload, error=str(e))
         await endpoint_helper.log_and_report_error(f'mqtt_client:publish_ticket_job_background:{topic}', e)
