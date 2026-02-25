@@ -185,7 +185,11 @@ async def queue_check(
     name_key = redis_helper.REDIS_KEY_BREAD_NAMES
     wait_list_key = redis_helper.REDIS_KEY_WAIT_LIST.format(bakery_id)
     served_key = redis_helper.REDIS_KEY_SERVED_TICKETS.format(bakery_id)
-    user_current_ticket_key = redis_helper.REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id)
+    breads_key = redis_helper.REDIS_KEY_BREADS.format(bakery_id)
+    prep_state_key = redis_helper.REDIS_KEY_PREP_STATE.format(bakery_id)
+    urgent_prep_key = redis_helper.REDIS_KEY_URGENT_PREP_STATE.format(bakery_id)
+    base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
+    current_served_key = redis_helper.REDIS_KEY_CURRENT_SERVED.format(bakery_id)
 
     pipe = r.pipeline()
     pipe.hgetall(time_key)
@@ -193,8 +197,12 @@ async def queue_check(
     pipe.hgetall(name_key)
     pipe.hget(wait_list_key, t)
     pipe.sismember(served_key, t)
-    pipe.get(user_current_ticket_key)
-    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_hit, is_served_flag, user_current_ticket_raw = await pipe.execute()
+    pipe.zrangebyscore(breads_key, '-inf', '+inf')
+    pipe.get(prep_state_key)
+    pipe.get(urgent_prep_key)
+    pipe.smembers(base_done_key)
+    pipe.get(current_served_key)
+    time_per_bread_raw, reservations_map, bread_names_raw, wait_list_hit, is_served_flag, all_breads, prep_state_raw, urgent_processing_raw, base_done_raw, current_served_raw = await pipe.execute()
 
     bread_time = {int(k): int(v) for k, v in time_per_bread_raw.items()}
     reservation_dict = {
