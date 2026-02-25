@@ -191,6 +191,8 @@ async def queue_check(
     base_done_key = redis_helper.REDIS_KEY_BASE_DONE.format(bakery_id)
     current_served_key = redis_helper.REDIS_KEY_CURRENT_SERVED.format(bakery_id)
 
+    user_current_ticket_raw = None
+
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
