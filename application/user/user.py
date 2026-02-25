@@ -244,16 +244,14 @@ async def queue_check(
     reservation_keys = sorted(reservation_dict.keys())
     algorithm_instance = Algorithm()
 
-    current_ticket_id = await _resolve_current_working_ticket_id(
-        r=r,
-        bakery_id=bakery_id,
-        reservation_dict=reservation_dict,
-        all_breads=all_breads,
-        prep_state_raw=prep_state_raw,
-        urgent_processing_raw=urgent_processing_raw,
-        base_done_raw=base_done_raw,
-        current_served_raw=current_served_raw,
-    )
+    # /res should expose the latest ticket moved to wait list (user-facing current customer).
+    # This key is updated when tickets are sent to wait list, including urgent-related flows.
+    current_ticket_id = None
+    if user_current_ticket_raw is not None:
+        try:
+            current_ticket_id = int(user_current_ticket_raw)
+        except (TypeError, ValueError):
+            current_ticket_id = None
 
     is_user_exist = t in reservation_keys
 
