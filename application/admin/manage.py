@@ -84,6 +84,8 @@ async def res_admin_queue_status(
     user_current_ticket_key = redis_helper.REDIS_KEY_USER_CURRENT_TICKET.format(bakery_id)
 
     # Fetch all data in one pipeline
+    user_current_ticket_raw = None
+
     pipe = r.pipeline()
     pipe.hgetall(time_key)
     pipe.hgetall(res_key)
